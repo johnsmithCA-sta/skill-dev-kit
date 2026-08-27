@@ -3,8 +3,8 @@
 """
 preflight_release.py — 技能发布预检工具
 =========================================
-发布前一键检查 4 项：敏感信息扫描 / frontmatter 字段校验 / 必含文件检查 / git 未跟踪文件告警。
-配套发布前 15 项检查清单（references/发布检查清单.md），本脚本自动覆盖第 1/3/5/6 项。
+发布前一键检查 5 项：敏感信息扫描 / frontmatter 字段校验 / 必含文件检查 / git 未跟踪文件告警 / 归属检查。
+配套发布前 16 项检查清单（references/发布检查清单.md），本脚本自动覆盖第 1/3/5/6/16 项。
 
 用法:
   python3 preflight_release.py <目录> [--platform skillhub|github] [--strict] [--quiet]
@@ -19,9 +19,13 @@ preflight_release.py — 技能发布预检工具
   critical  → 必然 FAIL (API key / 云凭据 / 明文 token)
   warning   → 默认仅告警, --strict 时 FAIL (本地路径 / 邮箱 / 疑似密码格式)
 
+归属检查 (critical):
+  author    → frontmatter author 字段必须非空
+  copyright → 源码目录 LICENSE 必须含 "Copyright (c)" 行 (SkillHub 发布包排除 LICENSE, 但源码目录保留, 恒检查)
+
 示例:
-  python3 preflight_release.py skillhub-publish/evernote-to-ima --platform skillhub
-  python3 preflight_release.py github-publish/evernote-to-ima --platform github --strict
+  python3 preflight_release.py path/to/my-skill --platform skillhub
+  python3 preflight_release.py github-publish/my-skill --platform github --strict
 """
 import argparse
 import os
@@ -142,12 +146,48 @@ def git_untracked(root):
     return [ln[3:].strip() for ln in out.splitlines() if ln.startswith("??")]
 
 
+COPYRIGHT_RE = re.compile(r"Copyright\s*[（(c©]\s*", re.I)
+
+
+def ownership_check(root, fm):
+    """归属检查 (critical): author 非空 + LICENSE 含 Copyright 行。
+
+    返回 (critical列表, info列表)。LICENSE 在 SkillHub 发布包中被排除,
+    但源码目录必须保留且含正确版权行——故对源码目录恒检查。
+    """
+    critical, info = [], []
+    author = (fm or {}).get("author", "").strip()
+    if not author:
+        critical.append("frontmatter 缺少 author 字段(归属锚点)")
+    else:
+        info.append(f"author = {author}")
+    lic = os.path.join(root, "LICENSE")
+    if not os.path.isfile(lic):
+        alt = [p for p in ("LICENSE.md", "LICENSE.txt") if os.path.isfile(os.path.join(root, p))]
+        lic = os.path.join(root, alt[0]) if alt else None
+    if lic is None:
+        critical.append("源码目录缺少 LICENSE 文件(含 Copyright 行的版权锚点)")
+    else:
+        try:
+            text = open(lic, encoding="utf-8").read()
+        except OSError:
+            text = ""
+        if COPYRIGHT_RE.search(text):
+            m = next((ln for ln in text.splitlines() if COPYRIGHT_RE.search(ln)), "")
+            info.append(f"LICENSE 版权行: {m.strip()[:60]}")
+        else:
+            critical.append("LICENSE 缺少 'Copyright (c)' 行(版权人未落名)")
+    return critical, info
+
+
 def main():
     ap = argparse.ArgumentParser(description="技能发布预检工具")
     ap.add_argument("target", help="待检查的目录")
     ap.add_argument("--platform", choices=["skillhub", "github"], default="skillhub")
     ap.add_argument("--strict", action="store_true", help="低危告警也视为失败")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--skip-ownership", action="store_true",
+                    help="跳过归属检查(仅自用/第三方技能确不需要 author/LICENSE Copyright 时使用)")
     args = ap.parse_args()
 
     root = os.path.abspath(args.target)
@@ -180,7 +220,7 @@ def main():
         # github 平台可能是 skills/<name>/SKILL.md
         skill_root = root
         for dp, _, fns in os.walk(root):
-            if "SKILL.md" in fns and os.path.dirname(dp).endswith(("skills", "skills" + os.sep + "evernote-to-ima")):
+            if "SKILL.md" in fns and "skills" in dp.split(os.sep):
                 skill_root = dp
                 break
         fm = parse_frontmatter(os.path.join(skill_root, "SKILL.md"))
@@ -232,6 +272,20 @@ def main():
             fails.append(f"git 未跟踪文件: {untracked}")
         else:
             warns.append(f"git 未跟踪文件: {len(untracked)} 个")
+
+    # 5. 归属检查 (author + LICENSE Copyright 行)
+    log("── 5. 归属检查 ──")
+    if args.skip_ownership:
+        log("  - --skip-ownership 指定, 跳过")
+    else:
+        own_critical, own_info = ownership_check(root, fm)
+        for i in own_info:
+            log(f"  ✓ {i}")
+        for c in own_critical:
+            log(f"  ✗ [高危] {c}")
+            fails.append(c)
+        if not own_critical:
+            log("  ✓ 归属锚点齐备 (author + Copyright 行); homepage 仓库真实性请人工/gh api 核验")
 
     # 结果
     log("")

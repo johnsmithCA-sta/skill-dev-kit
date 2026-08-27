@@ -7,7 +7,7 @@ SKILL.md description 触发词评估工具
 positional arguments:
   skill_dir             技能目录（--desc 模式可省略）
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   --gen
   --check

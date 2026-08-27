@@ -54,7 +54,9 @@ def make_evidence(kind):
             chunks.append(f)
         chk = read(os.path.join(SKILL, "references", "发布检查清单.md"))
         chunks.append("=== 发布检查清单 headline ===")
-        chunks.append(grep_first(chk, r".*15.{0,4}项.*"))
+        chunks.append(grep_first(chk, r".*16.{0,4}项.*"))
+        chunks.append("=== 一键执行顺序 publish 行 ===")
+        chunks.append(grep_first(chk, r".*skillhub publish.*"))
         return "\n".join(chunks)
     if kind == "desc_help":
         r = subprocess.run(
@@ -91,9 +93,9 @@ CASES = [
          assertions=["触发词评估", "评测技能"]),
     # C 发布流程演练（启发式评分）
     dict(id="C1", cat="publish-drill",
-         prompt="我要发布技能到 SkillHub，按 15 项清单走一遍",
+         prompt="我要发布技能到 SkillHub，按 16 项清单走一遍",
          evidence="listing",
-         assertions=["preflight_release.py", "make_skillhub_zip.py", "15 项"]),
+         assertions=["preflight_release.py", "skillhub publish", "16 项"]),
     dict(id="C2", cat="publish-drill",
          prompt="帮我校验新技能的 description 质量",
          evidence="desc_help",
@@ -148,6 +150,10 @@ def main():
             ev_text = make_evidence(c["evidence"])
             with open(os.path.join(d, "output", "evidence.txt"), "w", encoding="utf-8") as f:
                 f.write(ev_text)
+            # 非预评分用例清除遗留 grading.json，避免旧评分掩盖启发式真实评分
+            stale = os.path.join(d, "grading.json")
+            if os.path.exists(stale):
+                os.remove(stale)
             missing = [a for a in c["assertions"] if a not in ev_text]
             if missing:
                 print("WARN  %s 缺失断言证据: %s" % (c["id"], missing))

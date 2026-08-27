@@ -6,12 +6,12 @@
       "evidence": "输出包含要点"
     },
     {
-      "text": "make_skillhub_zip.py",
+      "text": "skillhub publish",
       "pass": true,
       "evidence": "输出包含要点"
     },
     {
-      "text": "15 项",
+      "text": "16 项",
       "pass": true,
       "evidence": "输出包含要点"
     }

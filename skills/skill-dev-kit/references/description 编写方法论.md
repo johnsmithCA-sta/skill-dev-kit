@@ -1,7 +1,7 @@
 # description 编写方法论（SKILL.md 触发命门）
 
 > 定位：**description 是技能唯一的触发凭据**——模型通过语义匹配决定是否加载技能。描述写不好，技能等于不存在。
-> 来源：ima 资料库《Skill 固化开发：经验与方法论（提升版）》§2.2（社区共识 + 官方方法论）。
+> 来源：社区共识 + 官方方法论（Anthropic skill-creator 实践）提纯，经个人技能开发实战验证。
 > 适用：编写 / 修改任何技能 SKILL.md frontmatter 的 `description` 字段；新技能开发时随「SKILL.md 五要素」一并产出。
 
 ## 0. 为什么它是「命门」

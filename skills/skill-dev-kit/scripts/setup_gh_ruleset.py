@@ -65,7 +65,7 @@ def resolve_repo(cwd):
 
 
 def build_body(name, pattern, rules, enforcement):
-    """默认不带 conditions (对所有 tag 生效, 与已验证的 evernote-to-ima 一致)。
+    """默认不带 conditions (对所有 tag 生效, 实测最稳妥的配置)。
 
     踩坑记录(2026-08-16): 传 pattern="v*" 时 conditions.ref_name.include=["v*"]
     会触发 422 Validation Failed —— GitHub 要求完整 ref 语法如 "refs/tags/*"。

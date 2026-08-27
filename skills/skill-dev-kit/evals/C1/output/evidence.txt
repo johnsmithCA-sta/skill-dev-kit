@@ -1,4 +1,5 @@
 === scripts/ ===
+__pycache__
 eval_loop.py
 eval_trigger.py
 make_skillhub_zip.py
@@ -19,4 +20,6 @@ description 编写方法论.md
 调试三步法.md
 错误处理与可靠性纪律.md
 === 发布检查清单 headline ===
-# 技能发布前必过检查清单（15 项）
+# 技能发布前必过检查清单（16 项）
+=== 一键执行顺序 publish 行 ===
+skillhub publish <技能目录> --dry-run --json
