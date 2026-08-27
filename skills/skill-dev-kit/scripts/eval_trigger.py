@@ -24,7 +24,7 @@ eval_trigger.py — SKILL.md description 触发词评估工具
   3. 未覆盖 → FAIL，提示补写触发词；覆盖率不足阈值 → REVIEW。
 
 工作原理（desc-check 模式）:
-  对 description 做 5 项静态校验（规则来源：方法论 §2.2，详见 references/description 编写方法论.md）：
+  对 description 做 5 项静态校验（规则来源：详见 references/SKILL.md 编写规范.md §七）：
   第三人称（无 我/本助手/I） / 含动作动词 / 含场景或文件类型 / 无 how 描述 / 含排他边界词。
   任一项不合格 → FAIL（退出码 1）。「Helps with documents」这类泛泛描述必 FAIL。
 
@@ -111,7 +111,7 @@ def gen_eval_set(count):
     }
 
 # ---------------------------------------------------------------- description 质量校验（--desc-check）
-# 规则来源：方法论 §2.2 description 四策略 + 三条硬性规则（详见 references/description 编写方法论.md）
+# 规则来源：description 四策略 + 三条硬性规则（详见 references/SKILL.md 编写规范.md §七）
 FIRST_PERSON = [
     re.compile(r"我(?:们|的|会|可以|帮|能|将|想|要|希望|已经|正在)?"),
     re.compile(r"本人|本助手"),
@@ -185,7 +185,7 @@ def run_desc_check(desc):
         if not ok:
             fails += 1
     if fails:
-        print("FAIL  description 有 %d 项不合格，请对照 references/description 编写方法论.md 修订" % fails)
+        print("FAIL  description 有 %d 项不合格，请对照 references/SKILL.md 编写规范.md §七 修订" % fails)
         return 1
     print("PASS  description 质量达标（5/5）")
     return 0

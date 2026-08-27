@@ -4,7 +4,7 @@ slug: skill-dev-kit
 displayName: 技能固化与发布工具包
 summary: 把可复用工作流固化为 Skill 并安全发布的全周期工具包：内置 16 项发布前检查清单（含归属与权益门禁）+ 5 个零依赖自动化脚本（发布预检 preflight_release / 打包归档 make_skillhub_zip / GitHub tag 保护 setup_gh_ruleset / 触发词评估 eval_trigger / 评测循环 eval_loop），并沉淀四层测试闭环、两轮脱敏审查、双平台发布流程与踩坑表，让后续同类技能跳过重复探索。
 description: 技能固化与发布工具包。当用户要"把工作流固化为 Skill、起草或完善 SKILL.md、做发布前脱敏与安全预检、打包 SkillHub zip、创建 GitHub tag 保护 ruleset、走双平台（SkillHub/GitHub）发布流程、沉淀可复用方法论、做技能触发词评估或评测循环"时使用。覆盖：固化判定（可复用×多步骤×有踩坑）→ 目录三件套（SKILL.md/scripts/references）→ SKILL.md 五要素 → 四层测试闭环 → 两轮脱敏审查（privacy-audit L1 自动扫描 + 市场专业审查）→ 发布前 16 项检查清单（含 author/Copyright 归属门禁）→ 5 脚本自动化 → 触发词评估与评测循环 → 双平台发布 → 复盘与自动化反哺。内置脚本零第三方依赖（仅 Python 标准库 + 可选 gh/skillhub CLI），可直接接入 CI 门禁。
-version: 1.5.0
+version: 1.6.0
 last_updated: 2026-08-27
 license: MIT
 author: johnsmithCA-sta
@@ -119,7 +119,7 @@ skill-name/
 5. **SkillHub 目录直发（默认路径）**：`skillhub publish <目录> --dry-run --json` 预检 → 同命令去 `--dry-run` 加 `--changelog` 实发；**无需先打包 zip**（`make_skillhub_zip.py` 降级为归档可选）。
 6. GitHub：`gh skill publish --tag vX.Y.Z` + `setup_gh_ruleset.py`。
 7. 发布后验证：以 publish 返回 `tags.latest` 为准（搜索索引有缓存延迟），记录 URL/版本/审核状态。
-8. 版本治理：Git 提交、tag 与 version 一致、Changelog 追加、ruleset 防篡改（详见知识分层 references）。
+8. 版本治理：Git 提交、tag 与 version 一致、向 `references/Changelog.md` 追加一行、ruleset 防篡改（详见知识分层 references）。
 9. 季度评审 + **失效触发随诊即改**（依赖变更/误判累积≥3次/生态变更，见知识分层 §三）；问题版本 feature flag 禁用。
 
 > 平台差异：SkillHub 上传 ≤10MB、按次计费、同版本不可重发；GitHub 需 `skills/<name>/SKILL.md` + README/LICENSE/CONTRIBUTING、无商业化。git push 不通用 `gh api` Contents API 兜底。
@@ -168,40 +168,24 @@ skill-name/
 > 用户：「把这个数据获取+校验流程固化为技能并发布到 SkillHub」
 
 1. 判定：可复用×多步骤×有踩坑 → 固化（§一）。
-2. 建目录三件套，写 SKILL.md（五要素，§二；description 对照编写方法论）。
+2. 建目录三件套，写 SKILL.md（五要素，§二；description 对照 `references/SKILL.md 编写规范.md` §七）。
 3. 四层测试闭环跑通（§五）→ 市场调研 Top5（§六）→ 两轮脱敏（§七）。
 4. `preflight_release.py ./my-skill --platform skillhub` → PASS（含归属检查）→ 逐项过 16 项清单。
 5. `skillhub publish ./my-skill --dry-run --json` 预检 → 确认目录无 LICENSE → 去 `--dry-run` 实发 → 记录 URL/版本（§八）。
 
 ## 参考文档（渐进披露，按需加载）
 
-- `references/发布检查清单.md`：16 项清单完整版 + 一键执行顺序（目录直发版）。
-- `references/脚本速查.md`：5 脚本完整命令、退出码、踩坑与 CI 接入。
-- `references/市场调研模板.md`：Top5 固定规则 + 5 份固定件模板。
-- `references/description 编写方法论.md`：触发命门——四策略 + 三硬性规则 + 正反例。
-- `references/错误处理与可靠性纪律.md`：10 条可靠性纪律，每条含代码示例。
-- `references/Token 降本纪律.md`：消耗归因 + 四条纪律 + 量化驱动方法。
-- `references/反模式清单.md`：20 条反模式 → 正确做法对照 + 发布前自查。
-- `references/核心公式与量化基准.md`：10 条量化基准 + 工具参数基准。
-- `references/调试三步法.md`：未触发/执行不一致/输出异常三类活诊断。
-- `references/SKILL.md 编写规范.md`：五要素 + 生产骨架（含逃逸条款）+ 写作原则。
-- `references/复盘报告模板.md`：五段式结构模板（内容留工作区）。
-- `references/知识分层与版本治理.md`：三层 memory + 版本治理 + 失效触发条件。
-- `references/全生命周期 10 步 + 认知底座.md`：Skill 本质 + 选型三岔口 + 四场景对照 + 10 步路线图。
-
-> 说明：本技能的方法论母文档与整合案例属个人项目档案（见「资产边界」红线②⑤⑥），不入技能包、不在包内暴露名称与路径；技能内所有资产已按「可执行知识」提纯重写。
-
-## 版本升级待办（下一版滚动积累）
-
-- [ ] 3.2 季度评审首轮执行（2026-09-30 前）：按知识分层 §三「失效触发条件 + 季度体检」双轨检查 v1.5.0 落地质量。
-- [ ] 3.4 新案例按 §八.9 失效触发机制融入，累计 ≥3 条批量 bump → v1.6.0。
-
-## Changelog
-
-| 日期 | 版本 | 变更类型 | 变更内容 | 来源 |
-|---|---|---|---|---|
-| 2026-08-19 | 1.1.0 | 新增 | 清单 12→15 项；+description 方法论/脚本速查 references；正文瘦身 <5000 token；frontmatter 补 last_updated | 对标评估 |
-| 2026-08-24 | 1.2.0 | 新增 | 阶段 1 工程化资产：eval_trigger --desc-check；+错误处理/降本/反模式/量化基准 4 references；preflight 正则自命中规避 | 工程化资产化 |
-| 2026-08-24 | 1.3.0 | 新增 | 阶段 2 生命周期资产：+调试三步法/编写规范/复盘模板/知识分层/全生命周期 5 references；§一/§七/§八 修订 | 生命周期资产化 |
-| 2026-08-24 | 1.4.0 | 新增 | 阶段 3 自身评测闭环：evals 11 用例 + benchmark 均分 1.00；触发词/意图清单扩充 | 自评测与治理 |
-| 2026-08-27 | 1.5.0 | 新增/修订 | **3.6 归属门禁**：preflight +归属检查（author/Copyright，critical），清单 15→16，§九 归属三档判定；**3.5 发布流程**：§八 改 SkillHub 目录直发，make_skillhub_zip 降级归档，踩坑表 +「直发带 LICENSE」；**2.7 固化质量**：逃逸条款/反模式 #19-20/失效触发条件；**防膨胀红线 4→6**：核心知识产权不入包、案例与来源不暴露（references 全面去标识化）；正文维持 <5000 token | 收尾 bump |
+| 文件 | 内容 | 何时查 |
+|---|---|---|
+| 发布检查清单.md | 16 项清单 + 一键执行顺序 | 发布前 |
+| 脚本速查.md | 5 脚本完整命令/退出码/CI 接入 | 用脚本时 |
+| SKILL.md 编写规范.md | 五要素 + 生产骨架 + description 四策略（§七） | 起草/改技能时 |
+| 核心公式与量化基准.md | 10 条量化基准 + 工具参数 + Token 降本纪律（§5） | 评审/降本时 |
+| 反模式清单.md | 20 条反模式 → 正确做法 + 自查表 | 写码前扫一遍 |
+| 错误处理与可靠性纪律.md | 10 条可靠性纪律含代码示例 | 设计脚本时 |
+| 调试三步法.md | 未触发/不一致/输出异常活诊断 | 技能出问题时 |
+| 全生命周期 10 步 + 认知底座.md | Skill 本质 + 选型三岔口 + 四场景对照 + 路线图 | 新技能立项时 |
+| 知识分层与版本治理.md | 三层 memory + 版本治理 + 失效触发条件 | 做版本决策时 |
+| 市场调研模板.md | Top5 固定规则 + 5 份固定件 | 发布前调研 |
+| 复盘报告模板.md | 五段式复盘模板 | 交付后复盘 |
+| Changelog.md | 本技能版本史（开发侧档案） | 追溯变更时 |

@@ -6,9 +6,8 @@ make_skillhub_zip.py
 preflight_release.py
 setup_gh_ruleset.py
 === references/ ===
+Changelog.md
 SKILL.md 编写规范.md
-Token 降本纪律.md
-description 编写方法论.md
 全生命周期 10 步 + 认知底座.md
 反模式清单.md
 发布检查清单.md
