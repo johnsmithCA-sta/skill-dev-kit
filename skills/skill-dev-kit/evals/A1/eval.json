@@ -1,0 +1,8 @@
+{
+  "prompt": "把这段重复了 5 次的可复用工作流固化成技能",
+  "category": "should-trigger",
+  "assertions": [
+    "固化为技能",
+    "沉淀为 Skill"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "assertions": [
+    {
+      "text": "发布预检",
+      "pass": true,
+      "evidence": "输出包含要点"
+    },
+    {
+      "text": "打包 SkillHub",
+      "pass": true,
+      "evidence": "输出包含要点"
+    }
+  ],
+  "passed": 2,
+  "total": 2,
+  "score": 1.0,
+  "mode": "heuristic-substring"
+}

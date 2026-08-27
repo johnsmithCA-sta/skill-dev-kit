@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚合）
+====================================================================
+对标 Anthropic skill-creator 的 run_eval + aggregate_benchmark：为「带技能」与「基线」
+两种运行收集输出并做断言评分，聚合为 benchmark.json，辅助判断技能是否真的提升了表现。
+
+用法:
+  python3 eval_loop.py <evals_dir> [--run] [--aggregate] [--out benchmark.json]
+
+  --run        扫描 <evals_dir> 下每个用例目录，执行 run_cmd（若提供）产生 output 与 timing
+  --aggregate  聚合所有用例的 grading.json → benchmark.json（默认动作）
+  --out        聚合输出文件（默认 <evals_dir>/benchmark.json）
+
+目录约定（每个测试用例一个子目录）:
+  evals_dir/
+  ├── case-01/
+  │   ├── eval.json        # {"prompt":..., "assertions":[...]} 断言=期望输出应包含的要点
+  │   ├── run_cmd.txt      # 可选：执行命令，产物写入 output/
+  │   ├── output/          # 运行产物（带技能）
+  │   ├── baseline/        # 基线产物（不带技能）
+  │   └── grading.json     # 评分结果：{"assertions":[{"text":..,"pass":true,"evidence":..}]}
+  └── case-02/ ...
+
+评分模式（降级策略，零外部依赖）:
+  1. grading.json 已存在 → 直接读取（人工/LLM 预先评分）；
+  2. 否则按 eval.json.assertions 做子串包含检查（启发式评分，evidence=命中/缺失要点）；
+  3. 无任何断言 → skip（不纳入聚合）。
+
+退出码: 0 = 聚合成功  1 = 失败（目录无效/无用例）
+
+示例:
+  python3 eval_loop.py ./my-skill/evals --aggregate
+"""
+import argparse
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+def load_json(p):
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def read_dir_text(d, exts=(".md", ".txt", ".json", ".py")):
+    """拼接目录下主要文本产物，用于断言子串匹配。"""
+    if not os.path.isdir(d):
+        return ""
+    chunks = []
+    for root, _, files in os.walk(d):
+        for fn in sorted(files):
+            if fn.lower().endswith(exts):
+                try:
+                    with open(os.path.join(root, fn), encoding="utf-8", errors="ignore") as f:
+                        chunks.append(f.read())
+                except Exception:
+                    pass
+    return "\n".join(chunks)
+
+def heuristic_grade(eval_json, output_text):
+    """按断言做子串包含检查，生成 grading 结构。"""
+    assertions = (eval_json or {}).get("assertions", [])
+    if not assertions:
+        return None
+    graded = []
+    for a in assertions:
+        key = a if isinstance(a, str) else a.get("text", "")
+        hit = bool(key) and key in output_text
+        graded.append({
+            "text": key,
+            "pass": hit,
+            "evidence": ("输出包含要点" if hit else "输出缺失要点: %s" % key),
+        })
+    passed = sum(1 for g in graded if g["pass"])
+    return {
+        "assertions": graded,
+        "passed": passed,
+        "total": len(graded),
+        "score": (passed / len(graded)) if graded else 0.0,
+        "mode": "heuristic-substring",
+    }
+
+def run_case(case_dir):
+    cmd_file = os.path.join(case_dir, "run_cmd.txt")
+    out_dir = os.path.join(case_dir, "output")
+    if not os.path.isfile(cmd_file):
+        return False, "无 run_cmd.txt，跳过执行"
+    with open(cmd_file, encoding="utf-8") as f:
+        cmd = f.read().strip()
+    if not cmd:
+        return False, "run_cmd.txt 为空"
+    os.makedirs(out_dir, exist_ok=True)
+    t0 = time.time()
+    try:
+        r = subprocess.run(cmd, shell=True, cwd=case_dir, capture_output=True, text=True, timeout=300)
+        dt = time.time() - t0
+        with open(os.path.join(out_dir, "_stdout.txt"), "w", encoding="utf-8") as f:
+            f.write(r.stdout or "")
+        with open(os.path.join(out_dir, "_stderr.txt"), "w", encoding="utf-8") as f:
+            f.write(r.stderr or "")
+        with open(os.path.join(case_dir, "timing.json"), "w", encoding="utf-8") as f:
+            json.dump({"seconds": round(dt, 3), "exit_code": r.returncode}, f, ensure_ascii=False, indent=2)
+        return True, "exit=%d 用时 %.2fs" % (r.returncode, dt)
+    except Exception as e:
+        return False, "执行失败: %s" % e
+
+def grade_case(case_dir):
+    eval_json = load_json(os.path.join(case_dir, "eval.json")) or {}
+    grading = load_json(os.path.join(case_dir, "grading.json"))
+    if grading:
+        return grading, "pre-graded"
+    out_text = read_dir_text(os.path.join(case_dir, "output"))
+    g = heuristic_grade(eval_json, out_text)
+    if g:
+        with open(os.path.join(case_dir, "grading.json"), "w", encoding="utf-8") as f:
+            json.dump(g, f, ensure_ascii=False, indent=2)
+        return g, "heuristic"
+    return None, "skip（无 grading.json 且 eval.json 无断言）"
+
+def aggregate(evals_dir, out_path):
+    cases = sorted(d for d in glob.glob(os.path.join(evals_dir, "*")) if os.path.isdir(d))
+    if not cases:
+        return None, "无测试用例子目录"
+    rows, tot_pass, tot_score, graded_n = [], 0, 0.0, 0
+    for c in cases:
+        name = os.path.basename(c)
+        grading, mode = grade_case(c)
+        if not grading:
+            rows.append({"case": name, "status": mode})
+            continue
+        passed = grading.get("passed")
+        total = grading.get("total")
+        if passed is None:  # pre-graded 结构：从 assertions 推导
+            a = grading.get("assertions", [])
+            passed = sum(1 for x in a if x.get("pass"))
+            total = len(a)
+        score = (passed / total) if total else 0.0
+        graded_n += 1
+        tot_pass += passed
+        tot_score += score
+        rows.append({"case": name, "mode": mode, "passed": passed, "total": total, "score": round(score, 3)})
+    bench = {
+        "cases": len(cases),
+        "graded": graded_n,
+        "assertion_passed": tot_pass,
+        "avg_score": round(tot_score / graded_n, 3) if graded_n else 0.0,
+        "verdict": ("PASS" if graded_n and (tot_score / graded_n) >= 0.7 else ("REVIEW" if graded_n else "NO-DATA")),
+        "detail": rows,
+    }
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(bench, f, ensure_ascii=False, indent=2)
+    return bench, None
+
+def main():
+    ap = argparse.ArgumentParser(description="技能评测循环编排与聚合")
+    ap.add_argument("evals_dir")
+    ap.add_argument("--run", action="store_true")
+    ap.add_argument("--aggregate", action="store_true")
+    ap.add_argument("--out", default=None)
+    args = ap.parse_args()
+
+    evals_dir = os.path.abspath(args.evals_dir)
+    if not os.path.isdir(evals_dir):
+        print("FAIL  目录不存在: %s" % evals_dir)
+        return 1
+    out = args.out or os.path.join(evals_dir, "benchmark.json")
+
+    if args.run:
+        for c in sorted(glob.glob(os.path.join(evals_dir, "*"))):
+            if os.path.isdir(c):
+                ok, msg = run_case(c)
+                print(("RUN  " if ok else "SKIP ") + os.path.basename(c) + "  " + msg)
+
+    bench, err = aggregate(evals_dir, out)
+    if err:
+        print("FAIL  " + err)
+        return 1
+    print("benchmark: %s" % out)
+    print("用例 %d，评分 %d，断言通过 %d，均分 %.2f，判定 %s" % (
+        bench["cases"], bench["graded"], bench["assertion_passed"], bench["avg_score"], bench["verdict"]))
+    for r in bench["detail"]:
+        if "score" in r:
+            print("  %s  %s  %d/%d  score=%.2f" % (r["case"], r["mode"], r["passed"], r["total"], r["score"]))
+        else:
+            print("  %s  %s" % (r["case"], r["status"]))
+    return 0 if bench["verdict"] in ("PASS", "REVIEW") else 1
+
+if __name__ == "__main__":
+    sys.exit(main())

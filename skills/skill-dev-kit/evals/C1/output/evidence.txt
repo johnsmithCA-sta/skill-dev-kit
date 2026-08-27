@@ -1,0 +1,22 @@
+=== scripts/ ===
+eval_loop.py
+eval_trigger.py
+make_skillhub_zip.py
+preflight_release.py
+setup_gh_ruleset.py
+=== references/ ===
+SKILL.md 编写规范.md
+Token 降本纪律.md
+description 编写方法论.md
+全生命周期 10 步 + 认知底座.md
+反模式清单.md
+发布检查清单.md
+复盘报告模板.md
+市场调研模板.md
+核心公式与量化基准.md
+知识分层与版本治理.md
+脚本速查.md
+调试三步法.md
+错误处理与可靠性纪律.md
+=== 发布检查清单 headline ===
+# 技能发布前必过检查清单（15 项）

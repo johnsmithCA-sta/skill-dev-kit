@@ -1,0 +1,18 @@
+{
+  "assertions": [
+    {
+      "text": "起草 SKILL.md",
+      "pass": true,
+      "evidence": "输出包含要点"
+    },
+    {
+      "text": "完善技能",
+      "pass": true,
+      "evidence": "输出包含要点"
+    }
+  ],
+  "passed": 2,
+  "total": 2,
+  "score": 1.0,
+  "mode": "heuristic-substring"
+}

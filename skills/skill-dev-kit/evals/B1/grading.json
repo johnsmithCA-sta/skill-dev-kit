@@ -1,0 +1,18 @@
+{
+  "assertions": [
+    {
+      "text": "用户意图为图像生成，不在技能触发范围",
+      "pass": true,
+      "evidence": "SKILL.md 触发词仅覆盖 技能开发/发布/脱敏/评测/复盘，无图像生成类条目"
+    },
+    {
+      "text": "技能触发词未包含画图/绘图类意图",
+      "pass": true,
+      "evidence": "SKILL.md 触发词仅覆盖 技能开发/发布/脱敏/评测/复盘，无图像生成类条目"
+    }
+  ],
+  "passed": 2,
+  "total": 2,
+  "score": 1.0,
+  "mode": "pre-graded"
+}

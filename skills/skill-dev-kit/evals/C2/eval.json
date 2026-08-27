@@ -1,0 +1,8 @@
+{
+  "prompt": "帮我校验新技能的 description 质量",
+  "category": "publish-drill",
+  "assertions": [
+    "--desc-check",
+    "description 质量"
+  ]
+}

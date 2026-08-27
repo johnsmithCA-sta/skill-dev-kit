@@ -1,0 +1,8 @@
+{
+  "prompt": "查一下今天深圳天气",
+  "category": "should-not-trigger",
+  "assertions": [
+    "用户意图为天气查询，不在技能触发范围",
+    "技能触发词未包含天气/资讯类意图"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "assertions": [
+    {
+      "text": "用户意图为翻译，不在技能触发范围",
+      "pass": true,
+      "evidence": "触发词无翻译类条目，与翻译技能不重叠"
+    },
+    {
+      "text": "技能触发词未包含翻译类意图",
+      "pass": true,
+      "evidence": "触发词无翻译类条目，与翻译技能不重叠"
+    }
+  ],
+  "passed": 2,
+  "total": 2,
+  "score": 1.0,
+  "mode": "pre-graded"
+}

@@ -1,0 +1,18 @@
+{
+  "assertions": [
+    {
+      "text": "用户意图为天气查询，不在技能触发范围",
+      "pass": true,
+      "evidence": "触发词聚焦技能生命周期，无天气/资讯类条目"
+    },
+    {
+      "text": "技能触发词未包含天气/资讯类意图",
+      "pass": true,
+      "evidence": "触发词聚焦技能生命周期，无天气/资讯类条目"
+    }
+  ],
+  "passed": 2,
+  "total": 2,
+  "score": 1.0,
+  "mode": "pre-graded"
+}

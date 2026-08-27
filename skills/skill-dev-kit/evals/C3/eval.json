@@ -1,0 +1,8 @@
+{
+  "prompt": "给技能建一套 evals 跑 benchmark",
+  "category": "publish-drill",
+  "assertions": [
+    "benchmark.json",
+    "eval_loop.py"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "prompt": "帮我画一张产品宣传图",
+  "category": "should-not-trigger",
+  "assertions": [
+    "用户意图为图像生成，不在技能触发范围",
+    "技能触发词未包含画图/绘图类意图"
+  ]
+}

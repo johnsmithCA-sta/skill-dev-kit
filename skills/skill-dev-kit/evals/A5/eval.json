@@ -1,0 +1,8 @@
+{
+  "prompt": "给技能做触发词评估和评测循环",
+  "category": "should-trigger",
+  "assertions": [
+    "触发词评估",
+    "评测技能"
+  ]
+}

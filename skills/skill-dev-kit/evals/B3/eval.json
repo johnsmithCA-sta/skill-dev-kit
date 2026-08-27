@@ -1,0 +1,8 @@
+{
+  "prompt": "把这段英文翻译成中文",
+  "category": "should-not-trigger",
+  "assertions": [
+    "用户意图为翻译，不在技能触发范围",
+    "技能触发词未包含翻译类意图"
+  ]
+}

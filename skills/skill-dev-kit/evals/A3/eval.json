@@ -1,0 +1,8 @@
+{
+  "prompt": "技能发布到 SkillHub 前帮我做预检和打包",
+  "category": "should-trigger",
+  "assertions": [
+    "发布预检",
+    "打包 SkillHub"
+  ]
+}

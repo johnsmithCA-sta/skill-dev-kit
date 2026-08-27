@@ -1,0 +1,18 @@
+{
+  "assertions": [
+    {
+      "text": "benchmark.json",
+      "pass": true,
+      "evidence": "输出包含要点"
+    },
+    {
+      "text": "eval_loop.py",
+      "pass": true,
+      "evidence": "输出包含要点"
+    }
+  ],
+  "passed": 2,
+  "total": 2,
+  "score": 1.0,
+  "mode": "heuristic-substring"
+}

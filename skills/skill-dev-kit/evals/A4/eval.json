@@ -1,0 +1,8 @@
+{
+  "prompt": "我的技能没触发也不生效，帮我调试",
+  "category": "should-trigger",
+  "assertions": [
+    "技能调试",
+    "没触发"
+  ]
+}

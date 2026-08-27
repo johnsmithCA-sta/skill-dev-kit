@@ -1,0 +1,19 @@
+usage: eval_trigger.py [-h] [--gen] [--check] [--desc-check] [--desc DESC]
+                       [--count COUNT] [--out OUT] [--threshold THRESHOLD]
+                       [skill_dir]
+
+SKILL.md description 触发词评估工具
+
+positional arguments:
+  skill_dir             技能目录（--desc 模式可省略）
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --gen
+  --check
+  --desc-check          校验 frontmatter description 质量
+  --desc DESC           直接校验给定描述文本（配合 --desc-check）
+  --count COUNT
+  --out OUT
+  --threshold THRESHOLD
+                        触发覆盖率阈值（默认 0.7）
