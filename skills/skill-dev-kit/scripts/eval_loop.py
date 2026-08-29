@@ -12,6 +12,8 @@ eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚�
   --run        扫描 <evals_dir> 下每个用例目录，执行 run_cmd（若提供）产生 output 与 timing
   --aggregate  聚合所有用例的 grading.json → benchmark.json（默认动作）
   --out        聚合输出文件（默认 <evals_dir>/benchmark.json）
+  --exts       只统计这些扩展名的产物（逗号分隔，如 .md,.txt）；
+               默认 **按内容探测读全部非二进制文本**，不做扩展名白名单
 
 目录约定（每个测试用例一个子目录）:
   evals_dir/
@@ -26,9 +28,24 @@ eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚�
 评分模式（降级策略，零外部依赖）:
   1. grading.json 已存在 → 直接读取（人工/LLM 预先评分）；
   2. 否则按 eval.json.assertions 做子串包含检查（启发式评分，evidence=命中/缺失要点）；
-  3. 无任何断言 → skip（不纳入聚合）。
+  3. 无任何断言 → skip（不纳入聚合）；
+  4. output/ 无产物 → skip（无数据 ≠ 全错，见下）。
 
-退出码: 0 = 聚合成功  1 = 失败（目录无效/无用例）
+缓存语义（v1.7.1 修正，别再踩）:
+  · 启发式评分产物落盘为 grading.json，mode="heuristic-substring"，属**机器缓存**；
+  · `--run` 重跑后会自动删掉这类缓存并按新产物重评；**人工预置的 grading.json
+    （mode 非 heuristic-substring）一律保留**；
+  · 无产物时**不落盘**评分——曾经照样打成 0 分并写进 grading.json，既把
+    「没跑」记成「全错」（违反评测方法论 §1.1），又会把下一轮真跑出来的产物
+    锁死在 0 分上，且 mode 显示 pre-graded 极难排查。
+
+退出码（三态，CI 必须按此判定）:
+  0 = PASS    均分 ≥ 0.7，可放行
+  2 = REVIEW  均分 < 0.7；或 NO-DATA（没有可评分用例）—— **需人工确认，不等于通过**
+  1 = 运行期失败（目录不存在等硬错误）—— 阻断
+
+  ⚠️ 曾存在的静默失败：REVIEW 被判为 0，CI 直接放行低分技能。REVIEW 必须走 2。
+  CI 判据应写为「1 阻断 / 2 告警 + 人工确认」，只判 0/1 会让 REVIEW 被当通过。
 
 示例:
   python3 eval_loop.py ./my-skill/evals --aggregate
@@ -49,19 +66,57 @@ def load_json(p):
     except Exception:
         return None
 
-def read_dir_text(d, exts=(".md", ".txt", ".json", ".py")):
-    """拼接目录下主要文本产物，用于断言子串匹配。"""
+# 仅作快速排除（大二进制文件不值得逐字节解码），真正的判定靠内容探测
+BIN_EXT_SKIP = (
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tiff",
+    ".pdf", ".zip", ".gz", ".tar", ".bz2", ".xz", ".7z", ".rar",
+    ".mp4", ".mp3", ".wav", ".mov", ".woff", ".woff2", ".ttf", ".otf",
+    ".pyc", ".so", ".dylib", ".exe", ".dll", ".class", ".jar", ".xlsx", ".docx", ".pptx",
+)
+
+def _is_text_file(p, probe=4096):
+    """按内容探测是否文本文件：前 probe 字节含 NUL 或无法 utf-8 解码 → 判为二进制。
+
+    为什么不用扩展名白名单：白名单只能覆盖"我们想到的"产物类型，
+    .html / .log / .csv / .yaml 这类真实产物会被漏评，评分结果假阴性。
+    """
+    try:
+        with open(p, "rb") as f:
+            chunk = f.read(probe)
+    except Exception:
+        return False
+    if b"\x00" in chunk:
+        return False
+    try:
+        chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+def read_dir_text(d, exts=None):
+    """拼接目录下的文本产物，用于断言子串匹配。
+
+    exts=None（默认）→ 读全部**非二进制**文本（内容探测，非扩展名白名单）；
+    exts 显式给出（如 --exts .md,.txt）→ 仅读这些扩展名。
+    """
     if not os.path.isdir(d):
         return ""
+    want = tuple(e.strip().lower() for e in exts) if exts else None
     chunks = []
     for root, _, files in os.walk(d):
         for fn in sorted(files):
-            if fn.lower().endswith(exts):
-                try:
-                    with open(os.path.join(root, fn), encoding="utf-8", errors="ignore") as f:
-                        chunks.append(f.read())
-                except Exception:
-                    pass
+            p = os.path.join(root, fn)
+            low = fn.lower()
+            if want is not None:
+                if not low.endswith(want):
+                    continue
+            elif low.endswith(BIN_EXT_SKIP) or not _is_text_file(p):
+                continue
+            try:
+                with open(p, encoding="utf-8", errors="ignore") as f:
+                    chunks.append(f.read())
+            except Exception:
+                pass
     return "\n".join(chunks)
 
 def heuristic_grade(eval_json, output_text):
@@ -107,16 +162,45 @@ def run_case(case_dir):
             f.write(r.stderr or "")
         with open(os.path.join(case_dir, "timing.json"), "w", encoding="utf-8") as f:
             json.dump({"seconds": round(dt, 3), "exit_code": r.returncode}, f, ensure_ascii=False, indent=2)
+        invalidate_machine_grading(case_dir)
         return True, "exit=%d 用时 %.2fs" % (r.returncode, dt)
     except Exception as e:
         return False, "执行失败: %s" % e
 
-def grade_case(case_dir):
+def invalidate_machine_grading(case_dir):
+    """--run 重跑后，删掉本脚本自己写的启发式评分缓存，保证按新产物重评。
+
+    只删 `mode == "heuristic-substring"` 的（机器缓存，重算无损）；
+    **人工预置的 grading.json 一律保留**——那是有意的人工评分，重跑产物不该冲掉它。
+
+    ⚠️ 历史缺陷：不失效缓存的话，产物已经更新、聚合却仍读旧结论，
+    表现为「明明全绿却报 0 分」——而 grading.json 的存在会让 mode 显示成
+    `pre-graded`，看上去像人工评的，极难排查。
+    """
+    p = os.path.join(case_dir, "grading.json")
+    if not os.path.isfile(p):
+        return False
+    try:
+        with open(p, encoding="utf-8") as f:
+            g = json.load(f)
+    except Exception:
+        return False
+    if not isinstance(g, dict) or g.get("mode") != "heuristic-substring":
+        return False
+    os.remove(p)
+    return True
+
+def grade_case(case_dir, exts=None):
     eval_json = load_json(os.path.join(case_dir, "eval.json")) or {}
     grading = load_json(os.path.join(case_dir, "grading.json"))
     if grading:
         return grading, "pre-graded"
-    out_text = read_dir_text(os.path.join(case_dir, "output"))
+    out_text = read_dir_text(os.path.join(case_dir, "output"), exts=exts)
+    # ⚠️ 无产物 = 无数据，不是「全错」。曾经在此照常打分并落盘 0 分 grading.json，
+    # 既违反评测方法论 §1.1（无数据不得判 FAIL），又会把下一轮真跑出来的产物
+    # 锁死在 0 分上（缓存被当 pre-graded 读取）。无产物一律 skip，不落盘。
+    if not out_text.strip():
+        return None, "skip（output/ 无产物，需先 --run）"
     g = heuristic_grade(eval_json, out_text)
     if g:
         with open(os.path.join(case_dir, "grading.json"), "w", encoding="utf-8") as f:
@@ -124,14 +208,14 @@ def grade_case(case_dir):
         return g, "heuristic"
     return None, "skip（无 grading.json 且 eval.json 无断言）"
 
-def aggregate(evals_dir, out_path):
+def aggregate(evals_dir, out_path, exts=None):
     cases = sorted(d for d in glob.glob(os.path.join(evals_dir, "*")) if os.path.isdir(d))
     if not cases:
         return None, "无测试用例子目录"
     rows, tot_pass, tot_score, graded_n = [], 0, 0.0, 0
     for c in cases:
         name = os.path.basename(c)
-        grading, mode = grade_case(c)
+        grading, mode = grade_case(c, exts=exts)
         if not grading:
             rows.append({"case": name, "status": mode})
             continue
@@ -164,7 +248,11 @@ def main():
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--aggregate", action="store_true")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--exts", default=None,
+                    help="只统计这些扩展名的产物（逗号分隔，如 .md,.txt）；"
+                         "默认按内容探测读全部非二进制文本")
     args = ap.parse_args()
+    exts = tuple(e.strip() for e in args.exts.split(",") if e.strip()) if args.exts else None
 
     evals_dir = os.path.abspath(args.evals_dir)
     if not os.path.isdir(evals_dir):
@@ -178,10 +266,11 @@ def main():
                 ok, msg = run_case(c)
                 print(("RUN  " if ok else "SKIP ") + os.path.basename(c) + "  " + msg)
 
-    bench, err = aggregate(evals_dir, out)
+    bench, err = aggregate(evals_dir, out, exts=exts)
     if err:
-        print("FAIL  " + err)
-        return 1
+        # 未做评测 ≠ 通过：给 REVIEW(2) 而不是 FAIL(1)，也不是 PASS(0)
+        print("REVIEW  " + err + "（未产生任何评分，需人工确认；若有预期用例请检查目录结构）")
+        return 2
     print("benchmark: %s" % out)
     print("用例 %d，评分 %d，断言通过 %d，均分 %.2f，判定 %s" % (
         bench["cases"], bench["graded"], bench["assertion_passed"], bench["avg_score"], bench["verdict"]))
@@ -190,7 +279,9 @@ def main():
             print("  %s  %s  %d/%d  score=%.2f" % (r["case"], r["mode"], r["passed"], r["total"], r["score"]))
         else:
             print("  %s  %s" % (r["case"], r["status"]))
-    return 0 if bench["verdict"] in ("PASS", "REVIEW") else 1
+    # PASS → 0（可放行）｜REVIEW → 2（需人工确认）｜NO-DATA → 2（未做评测，告警）
+    # 历史缺陷：此处曾把 REVIEW 判为 0，导致低分技能被 CI 放行（静默失败）
+    return {"PASS": 0}.get(bench["verdict"], 2)
 
 if __name__ == "__main__":
     sys.exit(main())

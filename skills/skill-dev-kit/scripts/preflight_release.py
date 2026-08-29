@@ -8,54 +8,121 @@ preflight_release.py — 技能发布预检工具
 
 用法:
   python3 preflight_release.py <目录> [--platform skillhub|github] [--strict] [--quiet]
+                              [--waive <项> --reason <文本>] [--skip-ownership]
 
   --platform   frontmatter 与必含文件按平台规范校验 (默认: skillhub)
   --strict     低危告警(warning)也视为失败
-  --quiet      只输出结果行
+  --quiet      只输出结果行(FAIL 时的修复指引照常打印——只报"不通过"不给修法是耍流氓)
+  --waive <项> 豁免指定告警项, 可多次传入; 必须同时给 --reason(无理由豁免 = 无审计)
+  --reason     豁免理由, --waive 时必填; 落盘 <目标目录>/.preflight-waiver.json 留痕
+  --skip-ownership  --waive ownership 的别名(跳过归属检查, 但不落盘审计)
 
-退出码: 0 = PASS(仅告警可放行)  1 = FAIL(存在高危问题)
+退出码: 0 = PASS(仅告警可放行)  1 = FAIL(存在高危问题)  2 = 参数错误(豁免项非法/缺理由)
 
 敏感分级:
-  critical  → 必然 FAIL (API key / 云凭据 / 明文 token)
-  warning   → 默认仅告警, --strict 时 FAIL (本地路径 / 邮箱 / 疑似密码格式)
+  critical  → 必然 FAIL, **且不可豁免** (API key / 云凭据 / 明文 token)
+  warning   → 默认仅告警, --strict 时 FAIL; 可 --waive 豁免 (本地路径 / 邮箱 / 疑似密码格式)
 
-归属检查 (critical):
-  author    → frontmatter author 字段必须非空
-  copyright → 源码目录 LICENSE 必须含 "Copyright (c)" 行 (SkillHub 发布包排除 LICENSE, 但源码目录保留, 恒检查)
+password_format 降噪（自动豁免, 无需 --waive）:
+  技能自身名（frontmatter name / slug / 目录名）与 CSS `prefers-*` 前缀不再计入——
+  三段式技能名与媒体查询属性**必然**命中 x-x-x 模式, 是纯误报（2026-08-29 实测:
+  6 技能 39 项 strict 失败里 36 项是它, 误报率 92%）。
+  第三方锁定/压缩文件（package-lock.json / yarn.lock / poetry.lock / *.min.js / *.map）
+  默认整体跳过并计数留痕——内容由注册表元数据生成, 不是技能资产。
+
+归属检查（分级，两者的性质不同）:
+  LICENSE / "Copyright (c)" 行  → **critical**, 恒 FAIL（关联真实权益风险，不是流程项）
+  author 字段                    → **warning**, 默认仅告警；--strict 时 FAIL
+    依据: author 不在平台必填字段集内（见 REQUIRED_FIELDS），缺 author 实测仍能发布成功。
+    曾把两者都判 critical，与 REQUIRED_FIELDS 自相矛盾——同一份规则里两套标准。
+    要强约束请显式 --strict，由使用者决定，不由工具替他决定。
+    author 告警可单独豁免: --waive author --reason ...（LICENSE Copyright 行不受影响，仍属 critical）
+
+门禁分级(详见 references/发布检查清单.md):
+  critical(阻断)  敏感信息命中 / LICENSE 缺失或无 Copyright 行 / 必含文件缺失 / frontmatter 必填字段缺失
+                  → FAIL (exit 1), --strict 下同样 FAIL
+  warning(告警)   author 缺失 / 本地路径 / 邮箱 / 疑似密码格式 / git 未跟踪文件
+                  → WARN (exit 0); --strict 下 FAIL (exit 1)
+  可豁免          warning 级全部 → --waive <项> --reason 落盘留痕; critical 级豁免会被拒绝
+
+可豁免项 (--waive 的稳定 key, 见 WAIVABLE_KEYS):
+  敏感类   localpath / homepath / email / password_format / phone
+  结构类   author / untracked / ownership
+  ⚠️ key 是稳定标识符, 不随中文说明变化——**不要用"说明"字段当匹配键**, 文案一改就失效。
 
 示例:
   python3 preflight_release.py path/to/my-skill --platform skillhub
   python3 preflight_release.py github-publish/my-skill --platform github --strict
+  # 文档示例路径属误报, 豁免并留痕(严格模式下也可放行)
+  python3 preflight_release.py . --platform skillhub --strict \
+      --waive localpath --waive email --reason "文档示例路径, 非真实个人信息"
 """
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 
 # ---------------------------------------------------------------- 敏感规则
+# 每条 = (豁免key, 级别, 正则, 说明)
+#   key 是给 --waive 用的稳定标识符, 与中文"说明"解耦 —— 说明文案随时会改, key 不会。
 SENSITIVE_RULES = [
-    # (级别, 正则, 说明)
-    ("critical", re.compile(r"skh_[A-Za-z0-9]{16,}"), "SkillHub API key"),
-    ("critical", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), "GitHub token"),
-    ("critical", re.compile(r"\bsk-[A-Za-z0-9]{20,}"), "OpenAI API key"),
-    ("critical", re.compile(r"\bAKID[A-Za-z0-9]{10,}"), "腾讯云 SecretId"),
-    ("critical", re.compile(r'"secret_id"\s*[:=]\s*"[A-Za-z0-9]{16,}"'), "COS SecretId"),
-    ("critical", re.compile(r'"secret_key"\s*[:=]\s*"[A-Za-z0-9+/=]{16,}"'), "COS SecretKey"),
-    ("critical", re.compile(r'"token"\s*[:=]\s*"[A-Za-z0-9+/=]{30,}"'), "临时 token"),
-    ("critical", re.compile(r"password\s*[:=]\s*['\"][^'\"]{6,}['\"]", re.I), "明文密码赋值"),
-    ("warning", re.compile("/User" + "s/[A-Za-z0-9_]+"), "本机绝对路径"),
-    ("warning", re.compile("/hom" + "e/[A-Za-z0-9_]+"), "Linux 用户路径"),
-    ("warning", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "邮箱地址"),
-    ("warning", re.compile(r"\b[A-Za-z0-9]{5,9}-[A-Za-z0-9]{5,9}-[A-Za-z0-9]{5,9}\b"), "疑似密码(x-x-x 格式)"),
-    ("warning", re.compile(r"\b1[3-9]\d{9}\b"), "手机号"),
+    # (豁免key, 级别, 正则, 说明)
+    ("skillhub_key", "critical", re.compile(r"skh_[A-Za-z0-9]{16,}"), "SkillHub API key"),
+    ("github_token", "critical", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), "GitHub token"),
+    ("openai_key", "critical", re.compile(r"\bsk-[A-Za-z0-9]{20,}"), "OpenAI API key"),
+    ("tencent_secretid", "critical", re.compile(r"\bAKID[A-Za-z0-9]{10,}"), "腾讯云 SecretId"),
+    ("cos_secretid", "critical", re.compile(r'"secret_id"\s*[:=]\s*"[A-Za-z0-9]{16,}"'), "COS SecretId"),
+    ("cos_secretkey", "critical", re.compile(r'"secret_key"\s*[:=]\s*"[A-Za-z0-9+/=]{16,}"'), "COS SecretKey"),
+    ("token", "critical", re.compile(r'"token"\s*[:=]\s*"[A-Za-z0-9+/=]{30,}"'), "临时 token"),
+    ("password", "critical", re.compile(r"password\s*[:=]\s*['\"][^'\"]{6,}['\"]", re.I), "明文密码赋值"),
+    ("localpath", "warning", re.compile("/User" + "s/[A-Za-z0-9_]+"), "本机绝对路径"),
+    ("homepath", "warning", re.compile("/hom" + "e/[A-Za-z0-9_]+"), "Linux 用户路径"),
+    ("email", "warning", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "邮箱地址"),
+    ("password_format", "warning", re.compile(r"\b[A-Za-z0-9]{5,9}-[A-Za-z0-9]{5,9}-[A-Za-z0-9]{5,9}\b"), "疑似密码(x-x-x 格式)"),
+    ("phone", "warning", re.compile(r"\b1[3-9]\d{9}\b"), "手机号"),
 ]
+# key → (级别, 说明)
+RULE_INDEX = {k: (lv, desc) for k, lv, _, desc in SENSITIVE_RULES}
+# critical 级: 真敏感, 命中即 FAIL, 且**拒绝豁免**(豁免真敏感 = 门禁形同虚设)
+CRITICAL_KEYS = {k for k, (lv, _) in RULE_INDEX.items() if lv == "critical"}
+# 非敏感规则的可豁免 warning 项(结构性告警)
+EXTRA_WAIVABLE = {
+    "author": "frontmatter author 字段缺失",
+    "untracked": "git 未跟踪文件",
+    "ownership": "归属检查整组 (author + LICENSE Copyright 行)",
+}
+# 可豁免全集 = 敏感规则里的 warning 级 + 结构性告警项
+WAIVABLE_KEYS = {k for k, (lv, _) in RULE_INDEX.items() if lv == "warning"} | set(EXTRA_WAIVABLE)
+# --waive 输出/审计用的项说明
+WAIVER_DESC = {k: desc for k, (_, desc) in RULE_INDEX.items()}
+WAIVER_DESC.update(EXTRA_WAIVABLE)
 
+# ⚠️ 刻意不用（死代码，勿"修复"）：按扩展名白名单过滤会造成敏感扫描盲区
+#    （.env / Dockerfile / 无扩展名配置文件都不在表里）。扫描走 scan_text 的内容探测。
+#    注意：下方 LOCKFILE_NAMES 的「按文件名跳过」与这里的「按扩展名白名单」不是一回事——
+#    前者是跳过个别已知的第三方生成物（package-lock 等由依赖注册表元数据生成，不是资产），
+#    覆盖面窄且有跳过计数留痕；后者是「只扫白名单扩展名」，会把无扩展名配置文件漏掉。
 TEXT_EXTS = {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".sh", ".cfg", ".ini", ".xml", ".html", ".css", ".js", ".ts"}
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build"}
-SKIP_FILES = {".DS_Store"}
+# 第三方锁定/压缩文件：内容由包管理器从注册表元数据生成，不是技能资产。
+# 实测（2026-08-29，6 技能批量体检）：锁定文件内的小写连字符标识符系统性命中
+# password_format 的 x-x-x 模式，39 项 strict 失败里 17 项来自这里（占 44%），
+# 且依赖声明写得越规范命中越多——属于纯噪声，默认跳过并计数留痕（可审计）。
+# ⚠️ 本注释不举真实形态的示例串：回溯文档会被本工具再读一遍（纪律：不复写触发形态）。
+LOCKFILE_NAMES = {"package-lock.json", "yarn.lock", "poetry.lock", "Pipfile.lock", "composer.lock"}
+LOCKFILE_SUFFIXES = (".min.js", ".map")
+# WAIVER_FILE 是本脚本自己写的审计产物(内容是项/理由/时间), 不该反过来被敏感扫描命中
+WAIVER_FILE = ".preflight-waiver.json"
+SKIP_FILES = {".DS_Store", WAIVER_FILE}
+# 单文件单规则的逐条命中上限，超出汇总为「另有 N 处」（防输出爆炸，不丢计数）
+MAX_HITS_PER_RULE = 5
 
 # ---------------------------------------------------------------- 平台规范
+# 平台必填字段。**author 不在此集合**（实测缺 author 仍能发布成功）→
+# 归属检查里 author 缺失判 warning 而非 critical；需要强约束时用 --strict。
 REQUIRED_FIELDS = {
     "skillhub": ["name", "slug", "displayName", "summary", "description", "version", "license"],
     "github": ["name", "description", "version", "license"],
@@ -86,13 +153,30 @@ def scan_text(path):
         return raw.decode("utf-8", errors="replace")
 
 
-def sensitive_scan(root):
-    """返回 (critical列表, warning列表, 扫描文件数)。"""
-    critical, warning, scanned = [], [], 0
+def sensitive_scan(root, waived=(), exempt_names=()):
+    """返回 (critical列表, warning列表, 扫描文件数, 豁免命中计数{key: n}, 跳过锁定文件数)。
+
+    waived 里的 key 对应 SENSITIVE_RULES 的豁免 key; 命中直接丢弃(不当告警也不当失败),
+    但**计数保留**在 suppressed 中, 供审计文件记录"这次到底豁免掉了多少处"——
+    豁免 0 处也照样落盘, 让审计能看出这是一次无效豁免(说明该项本就没问题或 key 选错了)。
+
+    exempt_names: password_format 规则的自动豁免词（技能 frontmatter name / slug / 目录名）。
+    实测（2026-08-29，6 技能批量体检）：三段式 kebab-case 技能名**必然**命中 x-x-x 模式
+    （如 4+8+1 项），占 39 项 strict 失败的大头——技能名是自己的名字，不是凭据。
+    只对 password_format 单条规则生效，其余规则不受影响；另豁免 CSS 媒体查询
+    `prefers-*` 前缀（同类 x-x-x 误报，前端/设计类技能高发）。
+    """
+    waived = set(waived)
+    exempt_lower = {n.lower() for n in exempt_names if n}
+    critical, warning, scanned, skipped_lockfiles = [], [], 0, 0
+    suppressed = {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for fn in filenames:
             if fn in SKIP_FILES or fn.endswith((".pyc", ".zip", ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".enex", ".db", ".ico")):
+                continue
+            if fn in LOCKFILE_NAMES or fn.endswith(LOCKFILE_SUFFIXES):
+                skipped_lockfiles += 1
                 continue
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, root)
@@ -100,15 +184,66 @@ def sensitive_scan(root):
             if text is None:
                 continue
             scanned += 1
-            for level, pattern, desc in SENSITIVE_RULES:
-                m = pattern.search(text)
-                if m:
+            for key, level, pattern, desc in SENSITIVE_RULES:
+                # finditer 全量命中：search 只报第一处，单文件 3 个密码只显示 1 个，
+                # 会让修复量被严重低估（改完跑一遍"还剩 2 个"才知道）。
+                hits = list(pattern.finditer(text))
+                if not hits:
+                    continue
+                if key == "password_format":
+                    hits = [m for m in hits
+                            if m.group(0).lower() not in exempt_lower
+                            and not m.group(0).lower().startswith("prefers-")]
+                    if not hits:
+                        continue
+                if key in waived:
+                    suppressed[key] = suppressed.get(key, 0) + len(hits)
+                    continue
+                shown = hits[:MAX_HITS_PER_RULE]
+                for m in shown:
                     snippet = m.group(0)
                     if len(snippet) > 24:
                         snippet = snippet[:12] + "…" + snippet[-8:]
                     item = f"{rel}: {desc} ({snippet})"
                     (critical if level == "critical" else warning).append(item)
-    return critical, warning, scanned
+                rest = len(hits) - len(shown)
+                if rest > 0:
+                    item = f"{rel}: {desc}（另有 {rest} 处同类命中未逐条列出）"
+                    (critical if level == "critical" else warning).append(item)
+    return critical, warning, scanned, suppressed, skipped_lockfiles
+
+
+def write_waiver(root, waived, reason, suppressed, fm):
+    """豁免落盘留痕 → <目标目录>/.preflight-waiver.json。
+
+    记 项/理由/时间/操作者/版本号 五要素。写失败只告警不阻断: 审计文件写不出来的
+    常见原因是目录只读, 那不该让"能过"的检查因为这个变成"过不了"。
+    """
+    record = {
+        "tool": "preflight_release.py",
+        "target": root,
+        "skill_version": (fm or {}).get("version") or "unknown",
+        "operator": os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown",
+        "waived_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "waivers": [
+            {
+                "item": k,
+                "desc": WAIVER_DESC.get(k, ""),
+                "reason": reason,
+                "suppressed_hits": suppressed.get(k, 0),
+            }
+            for k in sorted(waived)
+        ],
+    }
+    path = os.path.join(root, WAIVER_FILE)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except OSError as e:
+        print(f"[WARN] 豁免审计文件写入失败: {path} ({e})")
+        return None
+    return path
 
 
 def parse_frontmatter(path):
@@ -150,15 +285,21 @@ COPYRIGHT_RE = re.compile(r"Copyright\s*[（(c©]\s*", re.I)
 
 
 def ownership_check(root, fm):
-    """归属检查 (critical): author 非空 + LICENSE 含 Copyright 行。
+    """归属检查: LICENSE Copyright 为 critical, author 为 warning。
 
-    返回 (critical列表, info列表)。LICENSE 在 SkillHub 发布包中被排除,
-    但源码目录必须保留且含正确版权行——故对源码目录恒检查。
+    返回 (critical列表, warning列表, info列表)。
+
+    分级依据（曾自相矛盾: REQUIRED_FIELDS 不含 author, 此处却判 critical 禁止发布）:
+      - author      → **warning**: 平台必填集里没有它, 缺 author 实测仍能发布成功。
+                      归属是"应当有"的流程项, 不是"没有就发不出去"的阻断项。
+                      需要强约束时显式 --strict, 由使用者决定, 不由工具替他决定。
+      - LICENSE 文件 / Copyright (c) 行 → **critical**: 关联真实权益风险, 不是流程项。
+    LICENSE 在 SkillHub 发布包中被排除, 但源码目录必须保留且含正确版权行——故对源码目录恒检查。
     """
-    critical, info = [], []
+    critical, warning, info = [], [], []
     author = (fm or {}).get("author", "").strip()
     if not author:
-        critical.append("frontmatter 缺少 author 字段(归属锚点)")
+        warning.append("frontmatter 缺少 author 字段(归属锚点; 非平台必填, --strict 时阻断)")
     else:
         info.append(f"author = {author}")
     lic = os.path.join(root, "LICENSE")
@@ -177,7 +318,7 @@ def ownership_check(root, fm):
             info.append(f"LICENSE 版权行: {m.strip()[:60]}")
         else:
             critical.append("LICENSE 缺少 'Copyright (c)' 行(版权人未落名)")
-    return critical, info
+    return critical, warning, info
 
 
 def main():
@@ -186,35 +327,44 @@ def main():
     ap.add_argument("--platform", choices=["skillhub", "github"], default="skillhub")
     ap.add_argument("--strict", action="store_true", help="低危告警也视为失败")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--waive", action="append", default=[], metavar="项",
+                    help="豁免指定 warning 项(可多次传入, 必须同时给 --reason)。"
+                         f"可豁免: {', '.join(sorted(WAIVABLE_KEYS))}")
+    ap.add_argument("--reason", metavar="文本",
+                    help="豁免理由; --waive 时必填, 随豁免一起落盘 .preflight-waiver.json 留痕")
     ap.add_argument("--skip-ownership", action="store_true",
-                    help="跳过归属检查(仅自用/第三方技能确不需要 author/LICENSE Copyright 时使用)")
+                    help="跳过归属检查 —— --waive ownership 的别名(为兼容旧用法不落盘审计; "
+                         "需要留痕请改用 --waive ownership --reason ...)。"
+                         "仅自用/第三方技能确不需要 author/LICENSE Copyright 时使用")
     args = ap.parse_args()
+
+    # --- 豁免项校验: 先校验再扫描。打错 key / 豁免真敏感都必须当场报错, 不能静默放过 ---
+    #     （静默放过的后果: 使用者以为"豁免了"其实没豁免, 或以为只是告警其实是真密钥）
+    if args.waive and not (args.reason or "").strip():
+        ap.error("--waive 必须同时提供 --reason（无理由的豁免等于没有审计）")
+    waived = set()
+    for k in args.waive:
+        k = (k or "").strip()
+        if k in CRITICAL_KEYS:
+            ap.error(f"「{k}」是 critical 级, 不可豁免 —— 真敏感必须修(删密钥+轮换), 不能靠豁免放行")
+        if k not in WAIVABLE_KEYS:
+            ap.error(f"未知豁免项「{k}」。可豁免: {', '.join(sorted(WAIVABLE_KEYS))}")
+        waived.add(k)
+    # --skip-ownership 等价于 --waive ownership, 但**不落盘**(旧用法行为不变),
+    # 因此不进 waived 集合, 单独用 skip_own 控制。
+    skip_own = args.skip_ownership or "ownership" in waived
+    reason = (args.reason or "").strip()
 
     root = os.path.abspath(args.target)
     if not os.path.isdir(root):
         print(f"[FAIL] 目录不存在: {root}")
         sys.exit(1)
 
+    # fails 元素为 (问题, 修复指引) —— 只说"缺什么"不说"怎么修"违反纪律 4（本守门员自己先守住）
     fails, warns = [], []
     log = (lambda s: print(s)) if not args.quiet else (lambda s: None)
 
-    # 1. 敏感扫描
-    critical, warning, scanned = sensitive_scan(root)
-    log(f"── 1. 敏感扫描 ({scanned} 个文本文件) ──")
-    if not critical and not warning:
-        log("  ✓ 未发现敏感信息")
-    for item in critical:
-        log(f"  ✗ [高危] {item}")
-        fails.append(item)
-    for item in warning:
-        log(f"  ⚠ [告警] {item}")
-        if args.strict:
-            fails.append(item)
-        else:
-            warns.append(item)
-
-    # 2. frontmatter 校验
-    log(f"── 2. frontmatter 校验 (platform={args.platform}) ──")
+    # frontmatter 提前解析: password_format 的自动豁免词需要技能名（自己的名字不是凭据）
     fm = parse_frontmatter(os.path.join(root, "SKILL.md")) if os.path.exists(os.path.join(root, "SKILL.md")) else None
     if fm is None:
         # github 平台可能是 skills/<name>/SKILL.md
@@ -224,20 +374,50 @@ def main():
                 skill_root = dp
                 break
         fm = parse_frontmatter(os.path.join(skill_root, "SKILL.md"))
+    exempt_names = {fm.get(k, "") for k in ("name", "slug") if fm} | {os.path.basename(root)}
+
+    # 1. 敏感扫描
+    critical, warning, scanned, suppressed, skipped_lockfiles = sensitive_scan(root, waived, exempt_names)
+    log(f"── 1. 敏感扫描 ({scanned} 个文本文件) ──")
+    if skipped_lockfiles:
+        log(f"  - 已跳过 {skipped_lockfiles} 个第三方锁定/压缩文件（package-lock 等，非资产，默认排除）")
+    for k in sorted(waived):
+        if k in suppressed:
+            log(f"  - 已豁免: {k}（{WAIVER_DESC[k]}, {suppressed[k]} 处）— 理由: {reason}")
+    if not critical and not warning:
+        log("  ✓ 未发现敏感信息")
+    for item in critical:
+        log(f"  ✗ [高危] {item}")
+        fails.append((item, "删掉真实凭证并立即轮换（进过仓库的密钥一律视为已泄露）; "
+                            "代码里改用环境变量或 ${API_KEY} 占位符。critical 级不接受豁免, 只能修"))
+    for item in warning:
+        log(f"  ⚠ [告警] {item}")
+        if args.strict:
+            fails.append((item, "把真实值泛化为占位符/相对路径; 确属文档示例误报, 可 "
+                                "--waive <项> --reason \"...\" 豁免（会落盘留痕）"))
+        else:
+            warns.append(item)
+
+    # 2. frontmatter 校验
+    log(f"── 2. frontmatter 校验 (platform={args.platform}) ──")
     if fm is None:
         log("  ✗ 未找到 SKILL.md 或缺少 frontmatter (--- 块)")
-        fails.append("SKILL.md frontmatter 缺失")
+        fails.append(("SKILL.md frontmatter 缺失",
+                      "在 SKILL.md 顶部补 --- 包裹的 YAML 块, 至少含 name/description/version/license"
+                      + ("; skillhub 另需 slug/displayName/summary" if args.platform == "skillhub" else "")))
     else:
         missing = [k for k in REQUIRED_FIELDS[args.platform] if not fm.get(k)]
         if missing:
             log(f"  ✗ 缺少必需字段: {', '.join(missing)}")
-            fails.append(f"frontmatter 缺字段: {missing}")
+            fails.append((f"frontmatter 缺字段: {missing}",
+                          f"在 SKILL.md frontmatter 补齐: {', '.join(REQUIRED_FIELDS[args.platform])}"))
         else:
             ver = fm.get("version", "")
             ver_ok = bool(SEMVER.match(ver))
             log(f"  ✓ name={fm.get('name')} version={ver} {'✓' if ver_ok else '✗ 非语义化版本(需 X.Y.Z)'}")
             if not ver_ok:
-                fails.append(f"version 格式错误: {ver}")
+                fails.append((f"version 格式错误: {ver}",
+                              "version 改成语义化 X.Y.Z（如 1.6.1）, 并与发布 tag vX.Y.Z 保持一致"))
 
     # 3. 必含文件检查
     log("── 3. 必含文件检查 ──")
@@ -247,7 +427,13 @@ def main():
             log(f"  ✓ {req}")
         elif os.path.isdir(p):
             n = len([f for _, _, fs in os.walk(p) for f in fs])
-            log(f"  ✓ {req}/ ({n} 个文件)")
+            if n == 0:
+                # 空目录能通过检查 = 门禁形同虚设（mkdir scripts 即可绕过）
+                log(f"  ✗ 必含目录为空: {req}/（目录存在但无文件）")
+                fails.append((f"必含目录为空: {req}/",
+                              f"往 {req}/ 里放实际脚本, 或删掉这个空目录（空目录 = 绕过门禁, 不是通过）"))
+            else:
+                log(f"  ✓ {req}/ ({n} 个文件)")
         else:
             # github 平台放宽: skills/<name>/SKILL.md
             if args.platform == "github" and req == "SKILL.md" and os.path.isdir(os.path.join(root, "skills")):
@@ -256,7 +442,8 @@ def main():
                     log(f"  ✓ skills/{os.path.relpath(found[0], os.path.join(root, 'skills'))}/SKILL.md")
                     continue
             log(f"  ✗ 缺少: {req}")
-            fails.append(f"缺少必需文件: {req}")
+            fails.append((f"缺少必需文件: {req}",
+                          f"创建 {req}" + ("（github 平台也可放 skills/<name>/SKILL.md）" if req == "SKILL.md" else "")))
 
     # 4. git 未跟踪文件
     log("── 4. git 未跟踪文件 ──")
@@ -268,29 +455,63 @@ def main():
     else:
         for u in untracked:
             log(f"  ⚠ 未跟踪: {u}")
-        if args.strict:
-            fails.append(f"git 未跟踪文件: {untracked}")
+        if "untracked" in waived:
+            log(f"  - 已豁免: untracked（{len(untracked)} 个）— 理由: {reason}")
+        elif args.strict:
+            fails.append((f"git 未跟踪文件: {untracked}",
+                          "git add <要发布的文件>, 或写进 .gitignore 排除临时产物"))
         else:
             warns.append(f"git 未跟踪文件: {len(untracked)} 个")
 
     # 5. 归属检查 (author + LICENSE Copyright 行)
     log("── 5. 归属检查 ──")
-    if args.skip_ownership:
-        log("  - --skip-ownership 指定, 跳过")
+    if skip_own:
+        if "ownership" in waived:
+            log(f"  - 已豁免: ownership（整组跳过）— 理由: {reason}")
+        else:
+            # 文案保持与改造前逐字一致（向后兼容）; 迁移提示只放 --help 与文档
+            log("  - --skip-ownership 指定, 跳过")
     else:
-        own_critical, own_info = ownership_check(root, fm)
+        own_critical, own_warning, own_info = ownership_check(root, fm)
+        if "author" in waived:
+            # 只摘 author 告警, LICENSE Copyright 行(critical)不受影响
+            own_warning = [w for w in own_warning if "author" not in w]
+            log(f"  - 已豁免: author — 理由: {reason}")
         for i in own_info:
             log(f"  ✓ {i}")
         for c in own_critical:
             log(f"  ✗ [高危] {c}")
-            fails.append(c)
-        if not own_critical:
+            if "缺少 LICENSE 文件" in c:
+                hint = ("在源码目录新增 LICENSE（MIT 模板即可）, 首行写: "
+                        "Copyright (c) <年份> <版权人>")
+            else:
+                hint = "在 LICENSE 顶部补一行: Copyright (c) 2026 <版权人>（(c) 也可写作 © 或全角（c））"
+            fails.append((c, hint))
+        for w in own_warning:
+            log(f"  ⚠ [告警] {w}")
+            if args.strict:
+                fails.append((w, "在 SKILL.md frontmatter 加 author: <归属人>, "
+                                 "并与 LICENSE 的 Copyright 行同名"))
+            else:
+                warns.append(w)
+        if not own_critical and not own_warning:
             log("  ✓ 归属锚点齐备 (author + Copyright 行); homepage 仓库真实性请人工/gh api 核验")
+
+    # 6. 豁免落盘留痕（--skip-ownership 别名不进 waived, 故不落盘 —— 旧用法行为不变）
+    if waived:
+        wpath = write_waiver(root, waived, reason, suppressed, fm)
+        if wpath:
+            log(f"  ✓ 豁免已落盘: {wpath}")
 
     # 结果
     log("")
     if fails:
         print(f"结果: FAIL ({len(fails)} 项高危问题, 禁止发布)")
+        # 修复指引不受 --quiet 抑制: CI 里只看见 "FAIL" 却不知道改哪儿, 门禁就只是在制造噪音
+        print("修复指引:")
+        for i, (item, hint) in enumerate(fails, 1):
+            print(f"  {i}. {item}")
+            print(f"     └ 修: {hint}")
         sys.exit(1)
     if warns:
         print(f"结果: PASS (含 {len(warns)} 项告警, 建议人工确认)")

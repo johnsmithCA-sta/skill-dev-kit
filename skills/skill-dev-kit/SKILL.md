@@ -4,8 +4,8 @@ slug: skill-dev-kit
 displayName: 技能固化与发布工具包
 summary: 把可复用工作流固化为 Skill 并安全发布的全周期工具包：内置 16 项发布前检查清单（含归属与权益门禁）+ 5 个零依赖自动化脚本（发布预检 preflight_release / 打包归档 make_skillhub_zip / GitHub tag 保护 setup_gh_ruleset / 触发词评估 eval_trigger / 评测循环 eval_loop），并沉淀四层测试闭环、两轮脱敏审查、双平台发布流程与踩坑表，让后续同类技能跳过重复探索。
 description: 技能固化与发布工具包。当用户要"把工作流固化为 Skill、起草或完善 SKILL.md、做发布前脱敏与安全预检、打包 SkillHub zip、创建 GitHub tag 保护 ruleset、走双平台（SkillHub/GitHub）发布流程、沉淀可复用方法论、做技能触发词评估或评测循环"时使用。覆盖：固化判定（可复用×多步骤×有踩坑）→ 目录三件套（SKILL.md/scripts/references）→ SKILL.md 五要素 → 四层测试闭环 → 两轮脱敏审查（privacy-audit L1 自动扫描 + 市场专业审查）→ 发布前 16 项检查清单（含 author/Copyright 归属门禁）→ 5 脚本自动化 → 触发词评估与评测循环 → 双平台发布 → 复盘与自动化反哺。内置脚本零第三方依赖（仅 Python 标准库 + 可选 gh/skillhub CLI），可直接接入 CI 门禁。
-version: 1.6.0
-last_updated: 2026-08-27
+version: 1.7.2
+last_updated: 2026-08-29
 license: MIT
 author: johnsmithCA-sta
 homepage: https://github.com/johnsmithCA-sta/skill-dev-kit
@@ -29,6 +29,7 @@ agent_created: true
 - Token 降本 / 成本优化 / 怎么省 token
 - 技能调试（没触发 / 不生效）/ 评测技能 / 跑 benchmark / 触发词评估
 - 技能复盘 / 复盘模板
+- 知识产权边界 / 护城河判定 / 随包文档去留 / 版本说明撰写
 
 ## 一、何时值得固化（判定公式）
 
@@ -56,7 +57,7 @@ skill-name/
 
 ## 三、发布前必过：16 项检查清单
 
-> 完整清单见 `references/发布检查清单.md`（逐项勾选，全部通过后方可发布）；`preflight_release.py` 自动覆盖第 1/3/5/6/16 项。三条红线速记：
+> 完整清单见 `references/发布检查清单.md`（逐项勾选，全部通过后方可发布）；`preflight_release.py` 自动覆盖第 1/3/5/6/16 项。发布前三条必过（对应 Constraints 红线 ①③④）：
 
 1. **敏感扫描**：个人路径/账号/密码/token/领域数据全部参数化或泛化（privacy-audit L1 退出码 0 通过）。
 2. **LICENSE 必须排除**：发布目录/zip 内不含 LICENSE——SkillHub 拒收（HTTP 400"不允许的文件类型: LICENSE"）。
@@ -64,15 +65,7 @@ skill-name/
 
 ## 四、五个自动化脚本（速查）
 
-> 位于本技能 `scripts/`，纯 Python 标准库。完整命令、退出码、示例与踩坑见 `references/脚本速查.md`。
-
-| 脚本 | 用途 | 核心命令 | 退出码 |
-|---|---|---|---|
-| preflight_release.py | 发布预检：敏感/frontmatter/必含文件/git 未跟踪/归属（author + LICENSE Copyright） | `preflight_release.py <目录> --platform skillhub` | 0=PASS / 1=FAIL |
-| make_skillhub_zip.py | 打包归档（**非发布必经**，SkillHub CLI 支持目录直发；用于离线归档或 --keep-license 定制包） | `make_skillhub_zip.py <技能目录>` | 0=成功 / 1=失败 |
-| setup_gh_ruleset.py | GitHub tag 保护 ruleset（完整 JSON body 规避 422） | `setup_gh_ruleset.py --dry-run` 后 `setup_gh_ruleset.py` | 0=成功 / 1=失败 |
-| eval_trigger.py | 触发词评估：--gen 生成评估集 / --check 覆盖率 / --desc-check 描述质量 | `eval_trigger.py <技能目录> --check`（或 `--desc-check`） | 0=PASS / 1=FAIL / 2=REVIEW |
-| eval_loop.py | 评测循环：断言评分聚合为 benchmark.json | `eval_loop.py <evals目录> --aggregate` | 0=成功 / 1=失败 |
+> 位于本技能 `scripts/`，纯 Python 标准库。**5 个脚本（preflight_release / make_skillhub_zip / setup_gh_ruleset / eval_trigger / eval_loop）的完整命令、退出码、CI 接入与踩坑见 `references/脚本速查.md`。**
 
 > **自身评测闭环**：`evals/`(build_self_eval.py 生成 11 用例) + `eval_loop.py` → `benchmark.json`(自身均分 1.00 PASS)；回归重跑二者即可。
 
@@ -80,20 +73,22 @@ skill-name/
 
 | 层级 | 做法 | 验收 |
 |---|---|---|
+| 端到端跑通 | 最小真实链路先通 | 主链路 1 次成功 |
 | 合成样例 | 最小闭环（1 份含关键特征） | 验证核心链路 |
 | 增强样例 | 覆盖全特性 | 全特性通过 |
 | 真实数据 | 规模化验证 | 0 失败 / 逐条抽查 |
 | 错误路径 | 错误输入必须被拦截 | 拦截率 100% |
 
 > 正确路径通过不算数——错误路径（错误密码、非法校验码、边界误报）必须被正确拦截才算闭环。验收三件套：数量统计 + 逐条抽查 + 失败清单。
+> 长任务（>1 会话）接续载体见 `references/跨会话接续协议.md`。
 
 ## 六、发布前市场调研（轻量化）
 
 > 发布前轻量化环节，**不做全量普查**。完整模板见 `references/市场调研模板.md`，直接套用。
 
-- **固定规则**：按市场规模排序，只调研**最大的前 5 家**；全量普查一律作废。
+- **固定规则**：按市场规模排序，只调研**最大的前 5 家**（3 头部 + 2 近 90 天新上架，双轨防幸存者偏差）；全量普查一律作废。
 - **产出**：5 份固定件（调研对比表 + 生态格局 3 条洞察 + 独创性分析 + 商业竞争力速评 + 结论）。
-- **硬上限**：只调研 5 家；扩展须经人工确认。
+- **硬上限**：常规 5 家；触发式（红海信号 / 疑似直接竞品 / 共性不清晰）经人工确认可扩至 8 家。
 
 ## 七、两轮脱敏与安全审查
 
@@ -110,19 +105,46 @@ skill-name/
 ## 八、双平台发布流程
 
 > 逐项命令与细节见 `references/发布检查清单.md`（16 项 + 一键执行顺序）；此处只列骨架。
+>
+> ⚠️ 链条可靠性：全链约 30 个原子步，按基准 #7 可靠性 <70%——**每步必须落盘中间产物，禁止一次性跑完**；长任务接续载体见 `references/跨会话接续协议.md`。
 
-0. 发布前市场调研（§六）+ 可选触发词/评测自检（`eval_trigger --check` / `eval_loop --aggregate`）。
-1. 脱敏两轮审查 → 技能本体 0 敏感命中（§七）。
-2. frontmatter 补全：SkillHub 需 name/slug/displayName/summary/description/version/license（+ author/homepage 归属锚点，见 §九）。
-3. `preflight_release.py` 过一遍（自动覆盖清单 1/3/5/6/16）。
-4. 人工核对发布文件清单——LICENSE 必须排除，CLI 的 dry-run 与直发都不会替你排除它。
-5. **SkillHub 目录直发（默认路径）**：`skillhub publish <目录> --dry-run --json` 预检 → 同命令去 `--dry-run` 加 `--changelog` 实发；**无需先打包 zip**（`make_skillhub_zip.py` 降级为归档可选）。
-6. GitHub：`gh skill publish --tag vX.Y.Z` + `setup_gh_ruleset.py`。
-7. 发布后验证：以 publish 返回 `tags.latest` 为准（搜索索引有缓存延迟），记录 URL/版本/审核状态。
-8. 版本治理：Git 提交、tag 与 version 一致、向 `references/Changelog.md` 追加一行、ruleset 防篡改（详见知识分层 references）。
-9. 季度评审 + **失效触发随诊即改**（依赖变更/误判累积≥3次/生态变更，见知识分层 §三）；问题版本 feature flag 禁用。
+0. 发布前市场调研（§六）+ 可选触发词/评测自检（`eval_trigger --check` / `eval_loop --aggregate`）。`[可重试]`
+1. 脱敏两轮审查 → 技能本体 0 敏感命中（§七）。`[可重试]`
+2. frontmatter 补全：SkillHub 需 name/slug/displayName/summary/description/version/license（+ author/homepage 归属锚点，见 §九）。`[可重试]`
+3. `preflight_release.py` 过一遍（自动覆盖清单 1/3/5/6/16）。`[可重试]`
+4. 人工核对发布文件清单——LICENSE 必须排除，CLI 的 dry-run 与直发都不会替你排除它。`[可重试]`
+5. **SkillHub 目录直发（默认路径）**：`skillhub publish <目录> --dry-run --json` 预检 → 同命令去 `--dry-run` 加 `--changelog` 实发；**无需先打包 zip**（`make_skillhub_zip.py` 降级为归档可选）。`[不可逆]`
+6. GitHub：`gh skill publish --tag vX.Y.Z` + `setup_gh_ruleset.py`。`[不可逆]`
+7. 发布后验证：以 publish 返回 `tags.latest` 为准（搜索索引有缓存延迟），记录 URL/版本/审核状态。`[可重试]`
+8. 版本治理：Git 提交、tag 与 version 一致、向 `references/Changelog.md` 追加一行、ruleset 防篡改（详见知识分层 references）。`[不可逆]`
+9. 季度评审 + **失效触发随诊即改**（依赖变更/误判累积≥3次/生态变更，见知识分层 §三）；问题版本 feature flag 禁用。`[可重试]`
 
+> 步骤 5/6/8 为 `[不可逆]`，执行前一律：dry-run + 目录快照 + 人工确认。
 > 平台差异：SkillHub 上传 ≤10MB、按次计费、同版本不可重发；GitHub 需 `skills/<name>/SKILL.md` + README/LICENSE/CONTRIBUTING、无商业化。git push 不通用 `gh api` Contents API 兜底。
+
+**失败降级路径**（失败点 → 降级动作）：
+
+| 失败点 | 降级动作 |
+|---|---|
+| SkillHub 直发 400（含 LICENSE） | rsync 构造 staging 目录排除 LICENSE 后重发；同版本已占用则 bump 后再发 |
+| 同版本已存在 | **bump 版本号后重发**，禁止删库重来 |
+| preflight critical FAIL | 修复后重跑；属真敏感命中不得豁免 |
+| preflight warning 需放行 | `--waive <项> --reason <文本>`（可多次传入）落盘留痕后继续；key 与分级见 `references/发布检查清单.md` |
+| 安全扫描挂起 / download 404 | 以 publish 返回 `tags.latest` 为准，扫描队列异步等待 |
+| git push HTTP2 framing / 空回复 | `env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy git -c http.version=HTTP/1.1 push`；仍失败用 `gh api` Contents API 兜底 |
+| GitHub tag 推送后发现版本错 | **不可删**——bump 到下一版本重发并公告；禁止临时关闭 ruleset |
+
+## Constraints（红线 / 默认 / 逃逸）
+
+- **红线（不可越，4 条）**：① 隐私数据全本地处理；② 技能本体 0 敏感命中才发布；
+  ③ 发布内容不得含 LICENSE；④ 不可逆操作（发布/删除/对外公开）必须人工确认。
+- **运行时边界**：本技能执行时会做文件写（技能目录内）与网络写（双平台发布）两类动作。
+  文件写限于用户显式指定的技能目录；网络写限于发布平台域名。越界须先声明并获确认。
+  （隔离强度依运行环境能力而定，不假设平台提供强制沙箱。）
+- **默认（可偏离，须留痕）**：本文件其余所有「必须/禁止」均为默认指引。偏离时须
+  显式说明偏离理由与替代动作，并在交付说明中留痕。
+- **逃逸条款**：当本技能的指令与用户明确意图、或与其他更高优先级指令冲突/不适用时，
+  优先保障用户数据与意图，显式声明偏离了哪一条及原因——不得静默偏离，必要时降级人工。
 
 ## 九、边界与安全红线
 
@@ -130,9 +152,9 @@ skill-name/
 - 凭据环境变量化 + 数据驱动化脱敏：禁止硬编码凭证与领域数据。
 - 版本不可逆：SkillHub 同版本不可重发、发布后无法修改，changelog 需最终确认。
 - 安全审查工具定期更新：静态扫描无法覆盖未来更新引入的风险。
-- **发布内容（目录或 zip）不得含 LICENSE 文件**——SkillHub 拒收（见 §三红线 2）。
+- **发布内容（目录或 zip）不得含 LICENSE 文件**——SkillHub 拒收（见 §三必过项 2）。
 
-**资产边界（防膨胀红线，新增资产先自问）**：
+**资产边界（防膨胀，新增资产先自问）**：1–4 为**默认（可偏离须留痕）**，5–6 为**红线（不可越）**。
 
 1. 领域能力不进编排技能——可独立复用的能力（如脱敏审查）保持独立技能，仅被引用。
 2. 复盘文档不入技能——成本分析 / 评估报告是「项目档案」，留工作区。
@@ -140,6 +162,8 @@ skill-name/
 4. 新增资产三问定位：≥2 技能复用→进本技能；仅本技能用→进其 references；仅本项目结论→留工作区。
 5. **核心知识产权不入包**——商业评估报告、付费方法论、未公开策略/数据资产一律不入技能目录（含 references/evals），只在个人档案库留存。
 6. **来源与案例不暴露**——正文/脚本/评测用例中不得出现具体训练案例名、方法论来源文档名或其路径；方法论只以「社区共识/官方规范/个人实战」口径署名。
+
+> 红线 5–6 的配套执行：第三方受限内容反向检查、随包文档去留两检验、对外文档双轨制（README/版本说明以功能与独创性为主，不披露实现细节与 bug）→ `references/知识产权边界与护城河判定.md`。
 
 **归属与权益（三档判定）**：
 
@@ -149,19 +173,11 @@ skill-name/
 | 未发布自用 | frontmatter 预留 author/homepage 元数据即可，LICENSE 可后补 |
 | 第三方安装 | **不碰**——不改 author、不标自己为版权人 |
 
-发布前 5 分钟：preflight（归属为 critical，缺 author/Copyright 直接拦截）→ homepage `gh api` 可达 → 三处一致 → 确不需归属时 `--skip-ownership` 并声明理由。
+发布前 5 分钟：preflight（Copyright 为 critical 必拦；author 为 warning，需强约束用 `--strict`）→ homepage `gh api` 可达 → 三处一致 → 确不需归属时 `--skip-ownership` 并声明理由。
 
-## 十、踩坑表（直接使用，避免重蹈覆辙）
+## 十、踩坑表（12 条，已下沉）
 
-| 坑 | 根因 | 方案 |
-|---|---|---|
-| SkillHub 拒收 LICENSE | 平台不允许该文件类型（400） | 发布目录排除 LICENSE，frontmatter `license:` 字段声明 |
-| 目录直发把 LICENSE 带上去 | skillhub CLI 收集文件仅排除 .git/__pycache__ 等，**不排除 LICENSE**；dry-run 只做 metadata 校验不检文件白名单 | 直发前人工确认目录无 LICENSE（或先 zip 路径用 make_skillhub_zip 排除），被 400 拒后删文件重发 |
-| dry-run 盲区 | 只校验 metadata+打包，不查文件类型白名单 | 正式发布前人工核对文件清单 |
-| 正则误报（手机号/坐标常量） | 缺数字边界 / 缺校验器 | 加 `(?<![0-9])…(?![0-9])` 边界 + MOD11-2/Luhn/GB32100 校验器 |
-| 级别归一化漏报 | 字段 level 带括号注释 | JSON 级别规范化 + `normalize_level()` 兜底 |
-| 翻页/接口假成功 | 空字段判成功 | 关键字段非空校验 + 多源降级 |
-| tag 保护 422 | ref 语法不完整 | 用 `refs/tags/*` 或省略 conditions |
+> 完整踩坑表（坑 / 根因 / 方案）见 `references/发布检查清单.md` 末尾；发布前扫一遍。
 
 ## 十一、使用示例
 
@@ -177,15 +193,18 @@ skill-name/
 
 | 文件 | 内容 | 何时查 |
 |---|---|---|
-| 发布检查清单.md | 16 项清单 + 一键执行顺序 | 发布前 |
-| 脚本速查.md | 5 脚本完整命令/退出码/CI 接入 | 用脚本时 |
-| SKILL.md 编写规范.md | 五要素 + 生产骨架 + description 四策略（§七） | 起草/改技能时 |
-| 核心公式与量化基准.md | 10 条量化基准 + 工具参数 + Token 降本纪律（§5） | 评审/降本时 |
-| 反模式清单.md | 20 条反模式 → 正确做法 + 自查表 | 写码前扫一遍 |
-| 错误处理与可靠性纪律.md | 10 条可靠性纪律含代码示例 | 设计脚本时 |
-| 调试三步法.md | 未触发/不一致/输出异常活诊断 | 技能出问题时 |
-| 全生命周期 10 步 + 认知底座.md | Skill 本质 + 选型三岔口 + 四场景对照 + 路线图 | 新技能立项时 |
-| 知识分层与版本治理.md | 三层 memory + 版本治理 + 失效触发条件 | 做版本决策时 |
-| 市场调研模板.md | Top5 固定规则 + 5 份固定件 | 发布前调研 |
+| 发布检查清单.md | 16 项清单 + 一键执行顺序 + 踩坑表 | 发布前 |
+| 脚本速查.md | 5 脚本命令/退出码/CI 接入 | 用脚本 |
+| SKILL.md 编写规范.md | 五要素 + 生产骨架 + description 四策略 | 起草/改技能 |
+| 核心公式与量化基准.md | 11 条基准 + 工具参数 + Token 降本/预算治理 | 评审/降本 |
+| 反模式清单.md | 29 条反模式 + 自查表 | 写码前 |
+| 错误处理与可靠性纪律.md | 12 条可靠性纪律（含代码示例；HITL 按不可逆性触发；§12 回溯文档自审） | 设计脚本/写复盘 |
+| 调试三步法.md | 未触发/不一致/输出异常诊断 + 迭代四步法 | 技能出问题/长期演进 |
+| 全生命周期 10 步 + 认知底座.md | Skill 本质 + 选型三岔口 + 四场景对照 | 立项 |
+| 知识分层与版本治理.md | 三层 memory + 版本治理 + 失效触发 | 版本决策 |
+| 市场调研模板.md | 抽样双轨 + 5 份固定件 | 发布前调研 |
+| 评测方法论.md | Grader 六铁律 + 能力/回归双轨 + 构建路线图 + benchmark 判定 | 做评测时 |
+| 跨会话接续协议.md | 状态三件套 + 每会话起步序列 + 恢复流程 | 长任务跨会话时 |
 | 复盘报告模板.md | 五段式复盘模板 | 交付后复盘 |
-| Changelog.md | 本技能版本史（开发侧档案） | 追溯变更时 |
+| 知识产权边界与护城河判定.md | 受限内容反向检查 + 文档去留两检验 + 护城河三要素 + 对外文档双轨制 | 发布前 IP 自查 / 写 README 与版本说明 |
+| Changelog.md | 版本史（用户侧口径） | 追溯变更 |

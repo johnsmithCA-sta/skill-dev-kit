@@ -7,26 +7,49 @@ eval_trigger.py — SKILL.md description 触发词评估工具
 评估集，并静态检查 SKILL.md 的触发词覆盖是否命中预期意图。
 
 用法:
-  python3 eval_trigger.py <技能目录> [--gen] [--check] [--desc-check] [--desc "文本"] [--count N] [--out evals.json]
+  python3 eval_trigger.py <技能目录> [--gen] [--check] [--desc-check] [--desc "文本"]
+                          [--intents FILE] [--scene-words FILE] [--from-description]
+                          [--count N] [--out evals.json]
 
-  --gen        生成评估集模板（should/should-not 触发词清单，人工/LLM 填充后回读）
-  --check      静态检查 SKILL.md 触发词覆盖率（默认动作，二者都省略时执行）
-  --desc-check 静态校验 frontmatter description 本体质量（第三人称/动作动词/场景/无 how/排他边界）
-  --desc TEXT  直接校验给定描述文本（配合 --desc-check，跳过读技能目录，用于快速试错）
-  --count      生成评估集时每类条数（默认 10，--gen 时生效）
-  --out        评估集输出文件（默认 <技能目录>/evals.json）
+  --gen          生成评估集模板（should/should-not 触发词清单，人工/LLM 填充后回读）
+  --check        静态检查 SKILL.md 触发词覆盖率（默认动作，二者都省略时执行）
+  --desc-check   静态校验 frontmatter description 本体质量（自称构式/动作动词/场景/无 how/排他边界）
+  --desc TEXT    直接校验给定描述文本（配合 --desc-check，跳过读技能目录，用于快速试错）
+  --intents FILE 外部意图清单（JSON: {"should_trigger":[...]} 或 .txt 每行一条）
+                 —— 判定基准必须由目标技能自己提供，工具不替它编
+  --from-description
+                 覆盖率按 frontmatter description 口径评测（**平台真实行为**：自动发现
+                 只看 description，正文触发词章节平台不加载）。不加此开关时按正文
+                 「触发词」章节口径（字面口径，用于检查触发词覆盖完整性）。
+  --scene-words FILE
+                 目标技能域内的场景词清单（JSON 数组或 .txt 每行一条）；
+                 不给时，未识别到场景只出 REVIEW 提示，不判不合格
+  --strict       --desc-check 时把 WARN 级项也计入失败
+  --count        生成评估集时每类条数（默认 10，--gen 时生效）
+  --out          评估集输出文件（默认 <技能目录>/evals.json）
 
 退出码: 0 = 达标(PASS)  1 = 不达标(FAIL)  2 = 需人工确认(REVIEW)
 
 工作原理（check 模式）:
-  1. 解析 SKILL.md 的「触发词」章节（## 触发词 或 ## Triggers）；
-  2. 用字符串归一化（小写/去空白）比对预期意图清单是否被触发词覆盖；
-  3. 未覆盖 → FAIL，提示补写触发词；覆盖率不足阈值 → REVIEW。
+  1. 触发来源二选一（--from-description 给出时）：
+     - description 口径：整段 frontmatter description 作为一个判定源（平台口径）；
+     - 正文口径：解析「触发词」章节（## 触发词 / ## Triggers / ### 触发词）。
+  2. 取意图清单，优先级：--intents > <技能目录>/evals/trigger_eval.json > 无（→ REVIEW）；
+  3. 比对意图是否被触发源覆盖，覆盖率不足阈值 → REVIEW(2)。
+
+  ⚠️ 两个口径回答的是不同问题，不共用一把尺：正文口径回答「触发词写全了没」，
+  description 口径回答「平台能不能把用户说法路由到这个技能」。只跑正文口径会
+  高估可发现性（实测：字面 40% 的技能语义实际触发 ≥90%，反之亦然）。
+  缺「触发词」章节时不再静默 REVIEW——会明确提示该技能可发现性全靠 description，
+  请加 --from-description。
 
 工作原理（desc-check 模式）:
   对 description 做 5 项静态校验（规则来源：详见 references/SKILL.md 编写规范.md §七）：
-  第三人称（无 我/本助手/I） / 含动作动词 / 含场景或文件类型 / 无 how 描述 / 含排他边界词。
-  任一项不合格 → FAIL（退出码 1）。「Helps with documents」这类泛泛描述必 FAIL。
+  FAIL 级 2 项：自称构式（我可以/本助手/I can…）/ 无动作动词 —— 命中即不合格；
+  WARN 级 3 项：缺场景或文件类型 / 含 how 描述 / 缺排他边界 —— 默认只提示，
+                --strict 时才计入失败。
+  用户口语触发词里的「我的订阅 / 我要导出」属正确的关键词罗列，不算自称。
+  「Helps with documents」这类泛泛描述必 FAIL。
 
 示例:
   python3 eval_trigger.py ./my-skill --gen --count 20      # 生成 20+20 评估集
@@ -49,6 +72,20 @@ def load_skill_text(skill_dir):
                 return f.read(), p
     return None, None
 
+def _split_trigger_line(s):
+    """把一行里的同义说法拆成独立触发词：「A / B / C」→ 3 条。
+
+    整行当一个条目会让宽松匹配失效（长整行不可能成为用户说法的子串），
+    只能靠"用户说法恰好是整行的子串"命中，粒度是错的。
+
+    括号不配对说明切到了句内，整行回退，避免切出「技术选型（该不该做成技能」这种残片。
+    """
+    parts = [p.strip() for p in re.split(r"\s*/\s*|、|；|;", s) if p.strip()]
+    for p in parts:
+        if p.count("（") != p.count("）") or p.count("(") != p.count(")"):
+            return [s]
+    return parts if len(parts) > 1 else [s]
+
 def extract_triggers(text):
     """从 SKILL.md 提取「触发词」章节的条目列表。支持「## 触发词 / ## Triggers / ### 触发词」。"""
     m = re.search(r"^#{1,4}\s*(触发词|triggers?)\s*$", text, re.M | re.I)
@@ -62,7 +99,7 @@ def extract_triggers(text):
     for line in seg.splitlines():
         s = re.sub(r"^[\s>*\-\d.、·]+", "", line).strip()
         if s and not s.startswith("#"):
-            out.append(s)
+            out.extend(_split_trigger_line(s))
     return out
 
 def extract_frontmatter_description(text):
@@ -77,17 +114,37 @@ def extract_frontmatter_description(text):
 def norm(s):
     return re.sub(r"\s+", "", s).lower()
 
-def coverage(triggers, intents):
-    """返回 (覆盖的意图, 未覆盖的意图)。意图命中 = 任一触发词包含/被包含该意图关键词。"""
-    tnorm = [norm(t) for t in triggers]
+def coverage(triggers, intents, min_trigger_len=3):
+    """返回 (覆盖的意图, 未覆盖的意图)。
+
+    命中判据（两个方向，第二个带长度门限）:
+      强命中 —— 意图整句被测触发词包含（`itn in t`）：触发词里确实写了这句说法。
+      弱命中 —— 触发词是意图的实质子串（`t in itn`）且 len(t) >= min_trigger_len。
+
+    为什么要长度门限：没有它，一个 2 字泛词「发布」会被判成覆盖了
+    「发布前检查 / 发布预检 / 双平台发布」3 条具体意图，覆盖率虚高到 100%，
+    真正缺的触发词反而看不出来。门限值可用 --min-trigger-len 覆盖。
+
+    ⚠️ 反模式：判定规则不该写死成本技能的偏好。min_trigger_len 是长度约束，
+    不是词表，且可参数化——词表才会把本技能语境强加给别的技能。
+    """
+    tnorm = [norm(t) for t in triggers if t]
     hit, miss = [], []
     for it in intents:
         itn = norm(it)
-        ok = any(itn and (itn in t or t in itn) for t in tnorm if t)
-        (hit if ok else miss).append(it)
+        if not itn:
+            miss.append(it)
+            continue
+        strong = any(itn in t for t in tnorm)
+        weak = any(len(t) >= min_trigger_len and t in itn for t in tnorm)
+        (hit if (strong or weak) else miss).append(it)
     return hit, miss
 
 # ---------------------------------------------------------------- 评估集生成（--gen）
+# ⚠️ 这两份清单只是「模板素材」，供 --gen 生成骨架后由人工替换。
+#    它们取自本技能的语境，**不得用于判定其他技能**（历史缺陷：拿这 20 条去测 8 个
+#    技能，7 个判 0%，工具被绕过）。--check 判定只认 --intents 或目标技能自带的
+#    evals/trigger_eval.json；两者都没有时输出 REVIEW(2)，不判 FAIL。
 DEFAULT_INTENTS = [
     "固化为技能", "沉淀为 Skill", "起草 SKILL.md", "完善技能",
     "发布前检查", "发布预检", "脱敏预检", "打包 SkillHub",
@@ -107,15 +164,22 @@ def gen_eval_set(count):
     return {
         "should_trigger": should,
         "should_not_trigger": should_not,
-        "_note": "请人工/LLM 审阅扩充：should_trigger=应触发本技能的真实用户说法；should_not_trigger=不应触发的邻近说法。",
+        "_note": "⚠️ 这是模板示例，取自本工具自身的语境，不是你的评估集。"
+                 "必须整体替换为「你技能域内的真实用户说法」，否则测出来的是本工具、不是你的技能。"
+                 "填好后另存为 <技能目录>/evals/trigger_eval.json，--check 会自动读取它。",
     }
 
 # ---------------------------------------------------------------- description 质量校验（--desc-check）
 # 规则来源：description 四策略 + 三条硬性规则（详见 references/SKILL.md 编写规范.md §七）
+# ⚠️ 只匹配「自称构式」——描述里技能在说自己。
+#    用户口语触发词里的「我的订阅 / 我要导出 / 我想查余额」是标准的关键词罗列写法，
+#    曾经被这条规则判违规：**按规范写出的内容被规范自己的检查器判为违反规范**。
 FIRST_PERSON = [
-    re.compile(r"我(?:们|的|会|可以|帮|能|将|想|要|希望|已经|正在)?"),
-    re.compile(r"本人|本助手"),
-    re.compile(r"\b(?:I|I'm|we|we're|our|my|mine|us)\b", re.I),
+    re.compile(r"我(?:们)?(?:会|可以|能|能够|将|来|帮(?:你|您)?|负责|提供|支持|用于|替你)"),
+    re.compile(r"本(?:助手|技能|工具|插件|扩展)"),
+    re.compile(r"本人(?:会|可以|能|提供|负责)?"),
+    re.compile(r"\b(?:I|we)\s+(?:can|will|'ll|am|'m|help|provide|handle|support)\b", re.I),
+    re.compile(r"\bI'm\b|\bwe're\b", re.I),
 ]
 ACTION_VERBS_CN = [
     "提取", "创建", "生成", "转换", "解析", "校验", "打包", "发布", "审查", "查询", "扫描",
@@ -134,6 +198,10 @@ SCENE_PATTERNS = [
     re.compile(r"\.(?:pdf|docx|xlsx|pptx|ppt|zip|json|csv|md|txt|html|yaml|yml|xml|png|jpg|jpeg|mp4|enex|kml|geojson|doc|xls)\b", re.I),
     re.compile(r"\b(?:pdf|word|excel|ppt|powerpoint|zip|json|csv|markdown|skill|api|sql|kline|yaml|xml)\b", re.I),
 ]
+# 「已知场景提示词」，不是合格性白名单。
+# 未命中只说明"这个域的场景词不在这份提示里"，不等于描述里没有场景。
+# 判定语义：命中 → 加分；未命中 → WARN（--strict 时才算失败），不直接 FAIL。
+# 目标技能域内的场景词用 --scene-words <file> 注入。
 SCENE_CN = [
     "技能", "工作流", "报告", "合同", "体检", "健康", "企业", "工商", "股票", "地图", "瓦片",
     "标注", "隐私", "脱敏", "邮件", "简历", "发票", "知识库", "数据库", "接口", "论文", "公文",
@@ -154,41 +222,117 @@ BOUNDARY_SIGNALS = [
 ]
 
 
-def run_desc_check(desc):
-    """description 5 项静态质量校验。返回退出码（0=PASS / 1=FAIL）。"""
-    checks = []
+def run_desc_check(desc, scene_words=None, strict=False):
+    """description 5 项静态质量校验，分两级。
+
+    FAIL 级（命中即不合格）：自称构式 / 无动作动词 —— 这两项决定技能会不会被正确触发。
+    WARN 级（默认只提示，--strict 时计入失败）：缺场景 / 含 how / 缺排他边界
+      —— 这三项与"技能域"强相关，用封闭词表判它们不合格会误杀域外写法。
+
+    返回退出码（0=PASS / 1=FAIL）。
+    """
+    checks = []  # (名称, 级别, 是否通过, 说明)
 
     bad = [p.pattern for p in FIRST_PERSON if p.search(desc)]
-    checks.append(("第三人称（无 我/本助手/I）", not bad,
-                   "命中第一人称: %s" % "、".join(bad) if bad else ""))
+    checks.append(("自称构式（无 我可以/本助手/I can）", "FAIL", not bad,
+                   "命中自称: %s" % "、".join(bad) if bad else ""))
 
     has_verb = any(v in desc for v in ACTION_VERBS_CN) or bool(ACTION_VERBS_EN.search(desc))
-    checks.append(("含动作动词", has_verb,
-                   "未找到动作动词（如 提取/生成/校验/extract/create）" if not has_verb else ""))
+    checks.append(("含动作动词", "FAIL", has_verb,
+                   "未识别到动作动词（动词表是封闭的，域外动词可能误判；"
+                   "确属误判请人工确认并反馈扩充词表）" if not has_verb else ""))
 
-    has_scene = any(p.search(desc) for p in SCENE_PATTERNS) or any(k in desc for k in SCENE_CN)
-    checks.append(("含场景/文件类型", has_scene,
-                   "未找到具体场景或文件类型（如 pdf/zip/技能/体检报告）" if not has_scene else ""))
+    scene_pool = list(SCENE_CN) + [w for w in (scene_words or []) if w]
+    has_scene = any(p.search(desc) for p in SCENE_PATTERNS) or any(k in desc for k in scene_pool)
+    checks.append(("含场景/文件类型", "WARN", has_scene,
+                   "未识别到具体场景或文件类型（本域场景词可用 --scene-words 注入）"
+                   if not has_scene else ""))
 
     how = [p.pattern for p in HOW_SIGNALS if p.search(desc)]
-    checks.append(("无 how 描述", not how,
+    checks.append(("无 how 描述", "WARN", not how,
                    "疑似描述做法: %s（how 应留给正文）" % "、".join(how) if how else ""))
 
     has_boundary = any(p.search(desc) for p in BOUNDARY_SIGNALS)
-    checks.append(("含排他边界词", has_boundary,
+    checks.append(("含排他边界词", "WARN", has_boundary,
                    "缺少排他边界（何时不用/不做什么/仅用于）" if not has_boundary else ""))
 
     print("description : %s" % (desc[:60] + ("…" if len(desc) > 60 else "")))
-    fails = 0
-    for name, ok, detail in checks:
-        print("  %s %s%s" % ("✓" if ok else "✗", name, "（%s）" % detail if detail else ""))
-        if not ok:
-            fails += 1
-    if fails:
-        print("FAIL  description 有 %d 项不合格，请对照 references/SKILL.md 编写规范.md §七 修订" % fails)
+    if scene_words:
+        print("              （已注入本域场景词 %d 个）" % len(scene_words))
+    fail_n = warn_n = 0
+    for name, level, ok, detail in checks:
+        mark = "✓" if ok else ("✗" if level == "FAIL" else "!")
+        print("  %s [%s] %s%s" % (mark, level, name, "（%s）" % detail if detail else ""))
+        if ok:
+            continue
+        if level == "FAIL" or strict:
+            fail_n += 1
+        else:
+            warn_n += 1
+
+    if fail_n:
+        print("FAIL  description 有 %d 项不合格，请对照 references/SKILL.md 编写规范.md §七 修订" % fail_n)
         return 1
+    if warn_n:
+        print("PASS  description 达标（%d 项 WARN 建议；--strict 可将 WARN 计为失败）" % warn_n)
+        return 0
     print("PASS  description 质量达标（5/5）")
     return 0
+
+
+# ---------------------------------------------------------------- 外部清单加载（判定基准由调用方提供）
+def load_word_list(path):
+    """加载外部词表。支持：JSON 数组 / JSON 对象（优先取 should_trigger）/ 纯文本每行一条。"""
+    if not path or not os.path.isfile(path):
+        return None, "文件不存在: %s" % path
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+    except Exception as e:
+        return None, "读取失败: %s" % e
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return [l.strip() for l in raw.splitlines()
+                if l.strip() and not l.strip().startswith("#")], None
+    if isinstance(data, list):
+        return [str(x).strip() for x in data if str(x).strip()], None
+    if isinstance(data, dict):
+        for key in ("should_trigger", "intents", "words", "scene_words"):
+            v = data.get(key)
+            if isinstance(v, list) and v:
+                return [str(x).strip() for x in v if str(x).strip()], None
+        merged = []
+        for v in data.values():
+            if isinstance(v, list):
+                merged.extend(str(x).strip() for x in v if str(x).strip())
+        if merged:
+            return merged, None
+    return None, ("未能从 %s 解析出词表（支持 JSON 数组 / 含 should_trigger 的对象 / 每行一条的文本）" % path)
+
+
+TRIGGER_EVAL_CANDIDATES = ("evals/trigger_eval.json", "evals.json", "trigger_eval.json")
+
+def resolve_intents(skill_dir, explicit_file):
+    """三级回退取意图清单。返回 (intents, source, err)。
+
+    ① --intents <file>                        显式指定，最可信
+    ② <技能目录>/evals/trigger_eval.json       目标技能自带的真实用户说法
+    ③ 两者都没有 → (None, None, None)：调用方必须给 REVIEW(2)，**不得判 FAIL**
+    """
+    if explicit_file:
+        words, err = load_word_list(explicit_file)
+        if err:
+            return None, None, err
+        return words, "外部清单 %s" % explicit_file, None
+    for rel in TRIGGER_EVAL_CANDIDATES:
+        p = os.path.join(skill_dir, rel)
+        if os.path.isfile(p):
+            words, err = load_word_list(p)
+            if err:
+                return None, None, err
+            return words, rel, None
+    return None, None, None
 
 
 # ---------------------------------------------------------------- main
@@ -202,6 +346,14 @@ def main():
     ap.add_argument("--count", type=int, default=10)
     ap.add_argument("--out", default=None)
     ap.add_argument("--threshold", type=float, default=0.7, help="触发覆盖率阈值（默认 0.7）")
+    ap.add_argument("--intents", default=None, help="外部意图清单文件（JSON/txt），判定基准由你提供")
+    ap.add_argument("--from-description", action="store_true",
+                    help="按 frontmatter description 口径评测覆盖率（平台真实行为）；"
+                         "默认按正文「触发词」章节口径")
+    ap.add_argument("--scene-words", default=None, help="本技能域内的场景词清单（JSON/txt）")
+    ap.add_argument("--strict", action="store_true", help="--desc-check 时把 WARN 级项也计入失败")
+    ap.add_argument("--min-trigger-len", type=int, default=3,
+                    help="宽松匹配的最短触发词长度（默认 3；防止 2 字泛词虚高覆盖）")
     args = ap.parse_args()
 
     # desc-check 模式：优先于 --gen / 默认 check
@@ -219,7 +371,13 @@ def main():
             if not desc:
                 print("FAIL  frontmatter 缺少 description 字段: %s" % path)
                 return 1
-        return run_desc_check(desc)
+        scene_words = None
+        if args.scene_words:
+            scene_words, err = load_word_list(args.scene_words)
+            if err:
+                print("REVIEW  " + err)
+                return 2
+        return run_desc_check(desc, scene_words=scene_words, strict=args.strict)
 
     if not args.skill_dir:
         ap.error("缺少技能目录参数（或使用 --desc-check --desc <文本>）")
@@ -244,14 +402,48 @@ def main():
         return 1
     triggers = extract_triggers(text)
     desc = extract_frontmatter_description(text)
-    intents = DEFAULT_INTENTS
-    hit, miss = coverage(triggers, intents)
+
+    intents, src, err = resolve_intents(skill_dir, args.intents)
+    if err:
+        print("REVIEW  " + err)
+        return 2
+    if not intents:
+        print("SKILL.md : %s" % path)
+        print("触发词数 : %d" % len(triggers))
+        print("REVIEW  未找到评估集，无法判定触发词覆盖 —— 无数据不等于不合格，故不给 FAIL。")
+        print("        下一步（任选其一）：")
+        print("        ① python3 eval_trigger.py %s --gen --count 20   # 生成模板" % skill_dir)
+        print("        ② 把 should_trigger 替换为本技能的真实用户说法，另存为 %s/evals/trigger_eval.json" % skill_dir)
+        print("        ③ 或 python3 eval_trigger.py %s --check --intents <file>" % skill_dir)
+        return 2
+    if args.from_description and not desc:
+        print("SKILL.md : %s" % path)
+        print("FAIL  --from-description 需要 frontmatter description，但该字段为空")
+        return 1
+    if not triggers and not args.from_description:
+        print("SKILL.md : %s" % path)
+        print("REVIEW  未找到「## 触发词」章节（有评估集 %d 条）。" % len(intents))
+        print("        ⚠ 该技能的可发现性目前全靠 frontmatter description —— 平台自动发现")
+        print("        只看 description，正文触发词章节平台不加载。两个口径请分开评测：")
+        print("        ① python3 eval_trigger.py %s --check --from-description --intents <file>" % skill_dir)
+        print("           # description 口径（对应平台真实路由行为）")
+        print("        ② 或补写正文「触发词」章节后重跑本命令（正文口径，查触发词覆盖完整性）")
+        return 2
+
+    # 触发来源: description 整段作为一个判定源（平台口径），或正文触发词逐条（字面口径）
+    src_note = ""
+    if args.from_description:
+        triggers = [desc]
+        src_note = "（--from-description：平台口径，description 整段参与命中）"
+
+    hit, miss = coverage(triggers, intents, min_trigger_len=args.min_trigger_len)
     cov = len(hit) / len(intents) if intents else 1.0
 
     print("SKILL.md : %s" % path)
-    print("触发词数 : %d" % len(triggers))
+    print("触发词数 : %d%s" % (len(triggers), src_note))
     print("description: %s" % (desc[:80] + ("…" if len(desc) > 80 else "")))
-    print("预期意图 : %d，命中 %d，覆盖率 %.0f%%（阈值 %.0f%%）" % (len(intents), len(hit), cov*100, args.threshold*100))
+    print("预期意图 : %d（来源 %s），命中 %d，覆盖率 %.0f%%（阈值 %.0f%%）" % (
+        len(intents), src, len(hit), cov*100, args.threshold*100))
     for m in miss:
         print("  MISS   未覆盖意图: %s" % m)
     if miss and cov < args.threshold:

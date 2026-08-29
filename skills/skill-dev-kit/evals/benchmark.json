@@ -7,35 +7,35 @@
   "detail": [
     {
       "case": "A1",
-      "mode": "heuristic",
+      "mode": "pre-graded",
       "passed": 2,
       "total": 2,
       "score": 1.0
     },
     {
       "case": "A2",
-      "mode": "heuristic",
+      "mode": "pre-graded",
       "passed": 2,
       "total": 2,
       "score": 1.0
     },
     {
       "case": "A3",
-      "mode": "heuristic",
+      "mode": "pre-graded",
       "passed": 2,
       "total": 2,
       "score": 1.0
     },
     {
       "case": "A4",
-      "mode": "heuristic",
+      "mode": "pre-graded",
       "passed": 2,
       "total": 2,
       "score": 1.0
     },
     {
       "case": "A5",
-      "mode": "heuristic",
+      "mode": "pre-graded",
       "passed": 2,
       "total": 2,
       "score": 1.0
@@ -63,21 +63,21 @@
     },
     {
       "case": "C1",
-      "mode": "heuristic",
+      "mode": "pre-graded",
       "passed": 3,
       "total": 3,
       "score": 1.0
     },
     {
       "case": "C2",
-      "mode": "heuristic",
+      "mode": "pre-graded",
       "passed": 2,
       "total": 2,
       "score": 1.0
     },
     {
       "case": "C3",
-      "mode": "heuristic",
+      "mode": "pre-graded",
       "passed": 2,
       "total": 2,
       "score": 1.0
