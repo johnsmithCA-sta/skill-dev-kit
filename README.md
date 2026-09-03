@@ -1,5 +1,21 @@
 # skill-dev-kit — 技能固化与发布工具包
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg) ![Release](https://img.shields.io/badge/Release-v1.7.2-green.svg) ![SkillHub](https://img.shields.io/badge/SkillHub-@user_65c8c185%2Fskill-dev-kit-orange.svg)
+
+**English** — Toolkit for turning a hard-won workflow into a reusable Agent Skill, and shipping it safely: release preflight, packaging, tag protection, trigger-phrase evaluation and an eval loop. Zero third-party dependencies, pure Python stdlib.
+
+Writing a skill is easy. **Daring to publish it is the hard part** — did any secret leak through, is the attribution right, will the platform route the trigger phrases correctly, which step of the release chain will blow up. This kit turns that pre-publish uncertainty into executable checks.
+
+**Install / 安装**
+
+```bash
+skillhub install skill-dev-kit --namespace user_65c8c185
+# or / 或
+git clone https://github.com/johnsmithCA-sta/skill-dev-kit.git
+```
+
+---
+
 把「踩过坑的工作流」固化为可复用 Skill，并安全发布到 SkillHub 与 GitHub 的全周期工具包。内置发布门禁、评测闭环与 15 份方法论参考文档，让下一个同类技能跳过重复探索，开发成本预计降低 30%–50%。
 
 ## 它解决什么问题
