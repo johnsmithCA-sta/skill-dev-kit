@@ -25,9 +25,11 @@ import sys
 import zipfile
 
 MAX_SIZE = 10 * 1024 * 1024  # SkillHub 限制 ≤10MB
-SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build", ".DS_Store"}
+SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build", ".DS_Store",
+             "output"}  # 2026-09-06: 排除运行时产物目录——health-report 的 .gitignore 明示 output/
+# 可能含个人健康数据禁止入库；评测运行产物（stdout/stderr/timing）同属此类
 SKIP_EXT = {".pyc", ".pyo"}
-SKIP_FILES = {".DS_Store"}
+SKIP_FILES = {".DS_Store", ".preflight-waiver.json"}  # 2026-09-09: 豁免留痕件是本地审计产物, 不随包发布
 SKIP_NAMES = {"LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"}  # SkillHub 不允许, 默认排除
 
 
@@ -69,7 +71,19 @@ def make_zip(skill_dir, out_path, keep_license=False):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="SkillHub 发布 ZIP 一键打包")
+    ap = argparse.ArgumentParser(
+        description="SkillHub 发布 ZIP 一键打包",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例:
+  # 最常用：打包本技能（输出到同级目录，文件名带 frontmatter 里的 version）
+  python3 scripts/make_skillhub_zip.py .
+
+  # 指定输出路径，并保留 LICENSE 文件（默认排除）
+  python3 scripts/make_skillhub_zip.py . --out /tmp/my-skill.zip --keep-license
+
+  # 文件名不带版本号（兼容旧版固定名）
+  python3 scripts/make_skillhub_zip.py . --no-version
+""")
     ap.add_argument("skill_dir", help="技能目录 (含 SKILL.md)")
     ap.add_argument("--out", help="输出 zip 路径")
     ap.add_argument("--no-version", action="store_true", help="文件名不带版本号")

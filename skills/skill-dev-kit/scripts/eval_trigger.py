@@ -3,18 +3,29 @@
 """
 eval_trigger.py — SKILL.md description 触发词评估工具
 ======================================================
-对标 Anthropic skill-creator 的「触发词优化」：生成 should-trigger / should-not-trigger
+对标官方规范的「触发词优化」：生成 should-trigger / should-not-trigger
 评估集，并静态检查 SKILL.md 的触发词覆盖是否命中预期意图。
 
 用法:
   python3 eval_trigger.py <技能目录> [--gen] [--check] [--desc-check] [--desc "文本"]
                           [--intents FILE] [--scene-words FILE] [--from-description]
+                          [--holdout 0.4] [--reps 3]
                           [--count N] [--out evals.json]
 
   --gen          生成评估集模板（should/should-not 触发词清单，人工/LLM 填充后回读）
   --check        静态检查 SKILL.md 触发词覆盖率（默认动作，二者都省略时执行）
-  --desc-check   静态校验 frontmatter description 本体质量（自称构式/动作动词/场景/无 how/排他边界）
+  --desc-check   静态校验 frontmatter description 本体质量
+                 （FAIL: 自称构式/动作动词；WARN: 场景/无 how/排他边界/无流程摘要）
   --desc TEXT    直接校验给定描述文本（配合 --desc-check，跳过读技能目录，用于快速试错）
+  --holdout FLOAT
+                 留出集比例（默认 0 = 关闭；**推荐 0.4**）。开启后按固定种子确定性切分
+                 意图清单为训练集/留出集，两侧分别报覆盖率，**判定以留出集覆盖率为准**
+                 —— 这是防过拟合的关键：在训练集上调到满分、换个说法就不行，等于没改。
+                 留出集不足 2 条时降级 REVIEW，不判 FAIL（数据残缺不等于不合格）。
+  --reps INT     重复独立留出切分的次数（默认 1；**推荐 3**）。>1 时输出留出集覆盖率的
+                 均值 ± 标准差；标准差偏大 = 评估集切分不稳，对策是**扩量**，不是继续调措辞。
+                 ⚠️ 静态工具的口径：它衡量的是「评估集切分稳定性」，**不是**模型随机性。
+                 「同一条 query 跑 N 次求稳定触发率」需要真实调用通道，当前未实现。
   --intents FILE 外部意图清单（JSON: {"should_trigger":[...]} 或 .txt 每行一条）
                  —— 判定基准必须由目标技能自己提供，工具不替它编
   --from-description
@@ -44,11 +55,13 @@ eval_trigger.py — SKILL.md description 触发词评估工具
   请加 --from-description。
 
 工作原理（desc-check 模式）:
-  对 description 做 5 项静态校验（规则来源：详见 references/SKILL.md 编写规范.md §七）：
+  对 description 做 6 项静态校验（规则来源：详见 references/SKILL.md 编写规范.md §七）：
   FAIL 级 2 项：自称构式（我可以/本助手/I can…）/ 无动作动词 —— 命中即不合格；
-  WARN 级 3 项：缺场景或文件类型 / 含 how 描述 / 缺排他边界 —— 默认只提示，
-                --strict 时才计入失败。
-  用户口语触发词里的「我的订阅 / 我要导出」属正确的关键词罗列，不算自称。
+  WARN 级 4 项：缺场景或文件类型 / 含 how 描述 / 缺排他边界 / 含流程摘要
+                —— 默认只提示，--strict 时才计入失败。
+  「含流程摘要」= 出现「先…再…」「第 N 步」「step 1/2/3」或两个以上的箭头链（A → B → C）：
+  description 一旦把流程概括出来，agent 就会走这条捷径、不再读正文，技能退化成一行 prompt。
+  用户口语触发词里的「我的订阅 / 我要导出」属正确的关键词罗列，不算自称、也不算流程摘要。
   「Helps with documents」这类泛泛描述必 FAIL。
 
 示例:
@@ -60,6 +73,7 @@ eval_trigger.py — SKILL.md description 触发词评估工具
 import argparse
 import json
 import os
+import random
 import re
 import sys
 
@@ -170,7 +184,7 @@ def gen_eval_set(count):
     }
 
 # ---------------------------------------------------------------- description 质量校验（--desc-check）
-# 规则来源：description 四策略 + 三条硬性规则（详见 references/SKILL.md 编写规范.md §七）
+# 规则来源：description 五策略 + 三条硬性规则（详见 references/SKILL.md 编写规范.md §七）
 # ⚠️ 只匹配「自称构式」——描述里技能在说自己。
 #    用户口语触发词里的「我的订阅 / 我要导出 / 我想查余额」是标准的关键词罗列写法，
 #    曾经被这条规则判违规：**按规范写出的内容被规范自己的检查器判为违反规范**。
@@ -220,14 +234,29 @@ BOUNDARY_SIGNALS = [
     re.compile(r"\bonly\s+for\b|\bnot\s+for\b|\bwhen\b|\bexclusive\b|\bspecifically\s+for\b|"
                r"\bdedicated\s+to\b|\brather\s+than\b|\bunlike\b|\bnever\b", re.I),
 ]
+# 「流程摘要」信号 —— description 不得概括流程步骤。
+# 为什么：description 是常驻上下文里唯一的内容，正文按需加载。description 一旦把结论
+# 说完，agent 就会走这条捷径、正文失去被读取的理由，技能退化成一行 prompt。
+# 只判 WARN 不判 FAIL：中文里「先」字高频（优先、首先），措辞形态多变，封闭词表判不合格
+# 会误杀正确写法——与「场景词判不出就 WARN」同一条纪律。命中提示人工看一眼即可。
+FLOW_SIGNALS = [
+    re.compile(r"先[^，。；！？、\n]{0,12}再"),                  # 先…再…
+    re.compile(r"先[^，。；！？、\n]{0,12}(?:然后|之后|接着)"),
+    re.compile(r"第\s*[一二三四五六七八九十百\d]+\s*步"),
+    re.compile(r"依次|逐个(?:执行|处理|派发)|逐条(?:执行|处理)"),
+    # 两个以上箭头 = 串起来的步骤链（A → B → C）；单个箭头可能是「输入→输出」的正常写法
+    re.compile(r"(?:→|➔|⇒|-->|->)[^\n]*(?:→|➔|⇒|-->|->)"),
+    re.compile(r"\bstep\s*\d+\s*(?:[/,、&]\s*\d+)?", re.I),
+    re.compile(r"\bfirst\b[^\n]{0,60}\bthen\b", re.I),
+]
 
 
 def run_desc_check(desc, scene_words=None, strict=False):
-    """description 5 项静态质量校验，分两级。
+    """description 6 项静态质量校验，分两级。
 
     FAIL 级（命中即不合格）：自称构式 / 无动作动词 —— 这两项决定技能会不会被正确触发。
-    WARN 级（默认只提示，--strict 时计入失败）：缺场景 / 含 how / 缺排他边界
-      —— 这三项与"技能域"强相关，用封闭词表判它们不合格会误杀域外写法。
+    WARN 级（默认只提示，--strict 时计入失败）：缺场景 / 含 how / 缺排他边界 / 含流程摘要
+      —— 这四项与"技能域"和"措辞习惯"强相关，用封闭词表判它们不合格会误杀域外写法。
 
     返回退出码（0=PASS / 1=FAIL）。
     """
@@ -256,6 +285,11 @@ def run_desc_check(desc, scene_words=None, strict=False):
     checks.append(("含排他边界词", "WARN", has_boundary,
                    "缺少排他边界（何时不用/不做什么/仅用于）" if not has_boundary else ""))
 
+    flow = [p.pattern for p in FLOW_SIGNALS if p.search(desc)]
+    checks.append(("无流程摘要（不写步骤序列）", "WARN", not flow,
+                   "疑似概括了流程: %s（description 只写能力标签 + 触发场景，"
+                   "步骤序列/流程顺序/判定结论留给正文）" % "、".join(flow) if flow else ""))
+
     print("description : %s" % (desc[:60] + ("…" if len(desc) > 60 else "")))
     if scene_words:
         print("              （已注入本域场景词 %d 个）" % len(scene_words))
@@ -276,7 +310,7 @@ def run_desc_check(desc, scene_words=None, strict=False):
     if warn_n:
         print("PASS  description 达标（%d 项 WARN 建议；--strict 可将 WARN 计为失败）" % warn_n)
         return 0
-    print("PASS  description 质量达标（5/5）")
+    print("PASS  description 质量达标（6/6）")
     return 0
 
 
@@ -335,22 +369,63 @@ def resolve_intents(skill_dir, explicit_file):
     return None, None, None
 
 
+# ---------------------------------------------------------------- 留出集切分（防过拟合）
+def split_holdout(intents, ratio, seed=0):
+    """按固定种子确定性切分意图清单，返回 (训练集, 留出集)。
+
+    为什么要确定性：同一条命令跑两次给出不同的结论，门禁就没法接 CI——
+    `random.Random(seed).shuffle` 的 Mersenne Twister 序列跨版本稳定，可复现。
+    为什么要留出集：只用同一批意图调 description，等于拿考过的题当考试——
+    在训练集上调到满分、换个说法就不行，改进是假的。
+    """
+    idx = list(range(len(intents)))
+    random.Random(seed).shuffle(idx)
+    n_hold = int(round(len(intents) * ratio))
+    n_hold = max(1, min(n_hold, len(intents) - 1))  # 两侧都不能空
+    hold_idx = set(idx[:n_hold])
+    train = [intents[i] for i in range(len(intents)) if i not in hold_idx]
+    hold = [intents[i] for i in range(len(intents)) if i in hold_idx]
+    return train, hold
+
+
 # ---------------------------------------------------------------- main
 def main():
-    ap = argparse.ArgumentParser(description="SKILL.md description 触发词评估工具")
+    ap = argparse.ArgumentParser(
+        description="SKILL.md description 触发词评估工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例:
+  # 最常用：校验本技能 frontmatter description 的质量（6 项静态检查）
+  python3 scripts/eval_trigger.py . --desc-check
+
+  # 直接试错一段描述文本（跳过读技能目录）
+  python3 scripts/eval_trigger.py --desc-check --desc "Helps with documents"
+
+  # 查触发词覆盖并按留出集判定（防过拟合），意图清单用本技能自己的那份
+  python3 scripts/eval_trigger.py . --check --intents evals/trigger_eval.json --holdout 0.4 --reps 3
+""")
     ap.add_argument("skill_dir", nargs="?", help="技能目录（--desc 模式可省略）")
-    ap.add_argument("--gen", action="store_true")
-    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--gen", action="store_true",
+                    help="生成 should-trigger / should-not-trigger 评估集模板（需 --count 指定条数）")
+    ap.add_argument("--check", action="store_true",
+                    help="校验正文「触发词」章节的覆盖率（配 --from-description 改平台口径）")
     ap.add_argument("--desc-check", action="store_true", help="校验 frontmatter description 质量")
     ap.add_argument("--desc", default=None, help="直接校验给定描述文本（配合 --desc-check）")
-    ap.add_argument("--count", type=int, default=10)
-    ap.add_argument("--out", default=None)
+    ap.add_argument("--count", type=int, default=10,
+                    help="--gen 时正 / 负样本各生成多少条（默认 10）")
+    ap.add_argument("--out", default=None,
+                    help="--gen 的评估集输出路径（默认打到标准输出）")
     ap.add_argument("--threshold", type=float, default=0.7, help="触发覆盖率阈值（默认 0.7）")
     ap.add_argument("--intents", default=None, help="外部意图清单文件（JSON/txt），判定基准由你提供")
     ap.add_argument("--from-description", action="store_true",
                     help="按 frontmatter description 口径评测覆盖率（平台真实行为）；"
                          "默认按正文「触发词」章节口径")
     ap.add_argument("--scene-words", default=None, help="本技能域内的场景词清单（JSON/txt）")
+    ap.add_argument("--holdout", type=float, default=0.0,
+                    help="留出集比例（默认 0=关闭；推荐 0.4）。开启后按固定种子切分意图清单，"
+                         "训练/留出两侧分别报覆盖率，判定以留出集为准（防过拟合）")
+    ap.add_argument("--reps", type=int, default=1,
+                    help="重复独立留出切分的次数（默认 1；推荐 3），输出留出集覆盖率均值±标准差；"
+                         "衡量的是评估集切分稳定性，不是模型随机性")
     ap.add_argument("--strict", action="store_true", help="--desc-check 时把 WARN 级项也计入失败")
     ap.add_argument("--min-trigger-len", type=int, default=3,
                     help="宽松匹配的最短触发词长度（默认 3；防止 2 字泛词虚高覆盖）")
@@ -436,12 +511,72 @@ def main():
         triggers = [desc]
         src_note = "（--from-description：平台口径，description 整段参与命中）"
 
-    hit, miss = coverage(triggers, intents, min_trigger_len=args.min_trigger_len)
-    cov = len(hit) / len(intents) if intents else 1.0
-
     print("SKILL.md : %s" % path)
     print("触发词数 : %d%s" % (len(triggers), src_note))
     print("description: %s" % (desc[:80] + ("…" if len(desc) > 80 else "")))
+
+    holdout, reps = args.holdout or 0.0, max(1, args.reps or 1)
+
+    # ---- 留出集模式（防过拟合）: 训练/留出分开报, 判定以留出集为准 ----
+    if holdout > 0:
+        if not (0 < holdout < 1):
+            print("REVIEW  --holdout 应在 (0, 1) 区间内（收到 %s）；本次不判 PASS/FAIL" % holdout)
+            return 2
+        n_hold0 = max(1, min(int(round(len(intents) * holdout)), len(intents) - 1))
+        if n_hold0 < 2:
+            print("预期意图 : %d（来源 %s）" % (len(intents), src))
+            print("REVIEW  评估集只有 %d 条，留出集不足 2 条 —— 切分没有统计意义，不判 PASS/FAIL。" % len(intents))
+            print("        下一步：按 references/评测方法论.md 扩量（推荐 ≥20 条，正例 8–10 + 负例 8–10，")
+            print("        负例必须取「近误」——看着像、其实该找别的技能），扩量后用同一命令重跑。")
+            return 2
+        detail, train_covs, hold_covs, hold_misses = [], [], [], set()
+        for seed in range(reps):
+            tr, ho = split_holdout(intents, holdout, seed)
+            th, _ = coverage(triggers, tr, min_trigger_len=args.min_trigger_len)
+            hh, hm = coverage(triggers, ho, min_trigger_len=args.min_trigger_len)
+            tc = len(th) / len(tr) if tr else 1.0
+            hc = len(hh) / len(ho) if ho else 1.0
+            detail.append((seed, len(th), len(tr), tc, len(hh), len(ho), hc))
+            train_covs.append(tc); hold_covs.append(hc); hold_misses.update(hm)
+        cov = sum(hold_covs) / len(hold_covs)
+        tmean = sum(train_covs) / len(train_covs)
+        std = (sum((c - cov) ** 2 for c in hold_covs) / len(hold_covs)) ** 0.5 if reps > 1 else 0.0
+
+        print("预期意图 : %d（来源 %s）｜留出集 %.0f%%｜种子 0..%d｜重复 %d 次" % (
+            len(intents), src, holdout * 100, reps - 1, reps))
+        for seed, nh, ntr, tc, nhh, nho, hc in detail:
+            print("  种子 %d : 训练 %d/%d (%.0f%%) | 留出 %d/%d (%.0f%%)" % (
+                seed, nh, ntr, tc * 100, nhh, nho, hc * 100))
+        if reps > 1:
+            print("留出集覆盖率 : 均值 %.0f%% ± 标准差 %.0f%%（阈值 %.0f%%）—— 判定以留出集为准" % (
+                cov * 100, std * 100, args.threshold * 100))
+            if std > 0.15:
+                print("  提示  标准差偏大（>15 个百分点）：评估集切分不稳，对策是**扩量**，"
+                      "不是继续调措辞（否则调的是噪声）")
+        else:
+            print("训练集覆盖率 : %.0f%%（仅供参考）" % (tmean * 100))
+            print("判定基准 : 留出集覆盖率 %.0f%%（阈值 %.0f%%）—— 防过拟合，判定以留出集为准" % (
+                cov * 100, args.threshold * 100))
+        for m in sorted(hold_misses):
+            print("  MISS   留出集未覆盖意图: %s" % m)
+        if tmean >= args.threshold and cov < args.threshold:
+            print("REVIEW 疑似过拟合：训练集达标（%.0f%%）但留出集不达标（%.0f%%）。"
+                  "建议扩充评估集或换更通用的说法，别在训练集上继续调。" % (tmean * 100, cov * 100))
+            return 2
+        if hold_misses and cov < args.threshold:
+            print("FAIL  留出集覆盖率不足且有未覆盖意图，请补写触发词后重跑")
+            return 1
+        if hold_misses:
+            print("REVIEW 留出集覆盖率达标但仍有 %d 个未覆盖意图，建议人工确认是否纳入触发词" % len(hold_misses))
+            return 2
+        print("PASS  触发词覆盖达标（含留出集验证）")
+        print("提示  description 质量校验请单独跑: eval_trigger.py <技能目录> --desc-check")
+        return 0
+
+    # ---- 单臂模式（默认，向后兼容）----
+    hit, miss = coverage(triggers, intents, min_trigger_len=args.min_trigger_len)
+    cov = len(hit) / len(intents) if intents else 1.0
+
     print("预期意图 : %d（来源 %s），命中 %d，覆盖率 %.0f%%（阈值 %.0f%%）" % (
         len(intents), src, len(hit), cov*100, args.threshold*100))
     for m in miss:

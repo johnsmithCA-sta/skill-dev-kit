@@ -3,8 +3,10 @@
 """
 preflight_release.py — 技能发布预检工具
 =========================================
-发布前一键检查 5 项：敏感信息扫描 / frontmatter 字段校验 / 必含文件检查 / git 未跟踪文件告警 / 归属检查。
-配套发布前 16 项检查清单（references/发布检查清单.md），本脚本自动覆盖第 1/3/5/6/16 项。
+发布前一键检查 8 项：敏感信息扫描 / frontmatter 字段校验 / 必含文件检查 / git 未跟踪文件告警 /
+归属检查 / 悬空引用检查 / 版本与 tag 一致性 / 评测宣称—证据一致性。
+配套发布前 16 项检查清单（references/发布检查清单.md），本脚本自动覆盖第 1/3/5/6/16 项；
+后三项属「说了要做就得拿得出证据」的规范项，均为 warning 级，不阻断发布。
 
 用法:
   python3 preflight_release.py <目录> [--platform skillhub|github] [--strict] [--quiet]
@@ -41,13 +43,15 @@ password_format 降噪（自动豁免, 无需 --waive）:
 门禁分级(详见 references/发布检查清单.md):
   critical(阻断)  敏感信息命中 / LICENSE 缺失或无 Copyright 行 / 必含文件缺失 / frontmatter 必填字段缺失
                   → FAIL (exit 1), --strict 下同样 FAIL
-  warning(告警)   author 缺失 / 本地路径 / 邮箱 / 疑似密码格式 / git 未跟踪文件
+  warning(告警)   author 缺失 / 本地路径 / 邮箱 / 疑似密码格式 / git 未跟踪文件 /
+                  悬空引用 / 版本回退 / 评测宣称无据
                   → WARN (exit 0); --strict 下 FAIL (exit 1)
   可豁免          warning 级全部 → --waive <项> --reason 落盘留痕; critical 级豁免会被拒绝
 
 可豁免项 (--waive 的稳定 key, 见 WAIVABLE_KEYS):
   敏感类   localpath / homepath / email / password_format / phone
   结构类   author / untracked / ownership
+  引用类   dangling_ref / version_tag / eval_claim
   ⚠️ key 是稳定标识符, 不随中文说明变化——**不要用"说明"字段当匹配键**, 文案一改就失效。
 
 示例:
@@ -93,6 +97,11 @@ EXTRA_WAIVABLE = {
     "author": "frontmatter author 字段缺失",
     "untracked": "git 未跟踪文件",
     "ownership": "归属检查整组 (author + LICENSE Copyright 行)",
+    # 下面三项恒为 warning 级，理由同 name / 正文体积：目标平台不校验，属「应当满足」的规范项。
+    # 自建门禁严于目标平台会把正确写法误杀（反模式 #22），故一律不判 critical。
+    "dangling_ref": "§ 章节引用指向目标文件里不存在的章节",
+    "version_tag": "version 低于已有 tag(疑似版本回退)",
+    "eval_claim": "声明了评测能力但无 evals/ 证据",
 }
 # 可豁免全集 = 敏感规则里的 warning 级 + 结构性告警项
 WAIVABLE_KEYS = {k for k, (lv, _) in RULE_INDEX.items() if lv == "warning"} | set(EXTRA_WAIVABLE)
@@ -132,6 +141,17 @@ REQUIRED_FILES = {
     "github": ["README.md", "LICENSE", "SKILL.md"],
 }
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+# name 规范（官方规范硬线）: 1-64 字符 / 小写字母·数字·连字符 / 不以连字符开头或结尾 /
+# 禁连续连字符 / 与父目录名一致。下面这条正则一次覆盖前三项（首尾与连续连字符都在内）。
+# 分级为 **warning** 而非 critical: 目标平台不校验这几条, 属「应当满足」的规范项;
+# 自建门禁严于目标平台会把正确写法误杀（反模式 #22），需要强约束时用 --strict。
+NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+NAME_MAX = 64
+
+# L2 正文体积（官方推荐线 = 5000 token，保留为硬上限；目标值锚点取优秀实践中位数 ~2000）。
+# 同样定为 **warning** 级: 平台不校验体积, 属「应当满足」的规范项。
+BODY_TOKEN_LIMIT = 5000
+BODY_TOKEN_TARGET = 2000
 
 
 def scan_text(path):
@@ -284,6 +304,26 @@ def git_untracked(root):
 COPYRIGHT_RE = re.compile(r"Copyright\s*[（(c©]\s*", re.I)
 
 
+def body_token_estimate(path):
+    """按规范口径估算 SKILL.md **正文**体积（token）。读不到返回 None。
+
+    口径（与 references/核心公式与量化基准.md §2 逐字一致）:
+        正文 token ≈ 中文字数 × 1.0 + 非中文字符数 / 4
+
+    ⚠️ 必须先剔掉 frontmatter —— 规范声明的是「正文体」。
+    历史缺陷：文档里给的自检命令是整文件口径，含 frontmatter 会虚高（本技能实测差 400+ token），
+    照它比对会把一份达标文件误报成超线；两个口径混用属同类错误（计算列必须整列同源）。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None
+    body = re.sub(r"^---\s*\n.*?\n---\s*\n", "", text, count=1, flags=re.S)
+    cn = len(re.findall(r"[\u4e00-\u9fff]", body))
+    return int(round(cn + (len(body) - cn) / 4))
+
+
 def ownership_check(root, fm):
     """归属检查: LICENSE Copyright 为 critical, author 为 warning。
 
@@ -321,12 +361,174 @@ def ownership_check(root, fm):
     return critical, warning, info
 
 
+# ---------------------------------------------------------------- 引用校验
+# 只校验 § 编号引用（「见 X.md §4.1」这类跨文件章节引用）——结构一改就断，是文档改动后
+# 最容易留下的失效引用，也正是人工终检时唯一能查的那件事。
+# ⚠️ 刻意不查文件路径存在性：文档里合法地提到大量并不存在的文件名（写法示例、运行时产物、
+#    第三方锁定文件），实测路径口径 26/26 全为误报。⚠️ 门禁的误报率必须压到 10% 以内，
+#    否则使用者会学会无脑豁免或直接跳过——那比没有门禁更糟，因为它制造了「已检查」的错觉。
+HEADING_NUM_RE = re.compile(r"^#{1,6}\s+§?\s*([0-9]+)(?:\.([0-9]+))?", re.M)
+HEADING_CN_RE = re.compile(r"^#{1,6}\s+§?\s*([一二三四五六七八九十]+)(?=[\s、.．:：])", re.M)
+SEC_REF_RE = re.compile(r"§\s*([0-9]+(?:\.[0-9]+)?|[一二三四五六七八九十]+)")
+
+
+def _section_index(path):
+    """该文件可被引用的章节号集合，形如 {'1','1.1','4.1','五'}。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return set()
+    idx = set()
+    for m in HEADING_NUM_RE.finditer(text):
+        idx.add(m.group(1))
+        if m.group(2):
+            idx.add(f"{m.group(1)}.{m.group(2)}")
+    idx |= {m.group(1) for m in HEADING_CN_RE.finditer(text)}
+    return idx
+
+
+def _pick_target(text, known):
+    """在文本前缀里找出被引用的目标文件：取**结束位置最靠后**（即离 § 最近）的那个。
+
+    先按远近、再按长短：`…错误处理与可靠性纪律.md`（第三步）、SKILL.md §十` 里最近的
+    是 SKILL.md；而 `` `references/SKILL.md 编写规范.md` §4.1 `` 里 `SKILL.md` 与
+    `SKILL.md 编写规范.md` 起始位置相同，长名结束更靠后，因此不会被同名短文件抢走。
+    """
+    cands = [(text.rfind(n) + len(n), len(n), n) for n in known if n in text]
+    return max(cands)[2] if cands else None
+
+
+def ref_check(root):
+    """校验「…<文件>.md §N」这种点明了目标文件的章节引用是否指向真实存在的章节。
+
+    返回 (断链列表, § 引用总数, 未判定列表)。
+
+    ⚠️ 只判定**同行、紧邻 § 之前（40 字符内）**写出目标文件名的引用。这是唯一能可靠
+    解析目标的形态；实测「取同行最近的文件名当目标」会双向猜错——既把文件内自引用
+    判成别的文件，又把跨文件引用判成自引用，14 项里 14 项全假。其余（含自引用）只
+    汇总不判定，交人工核对：漏报可以补看，误报会让整道门禁被学会无视。
+    """
+    ref_dir = os.path.join(root, "references")
+    files = []
+    if os.path.isfile(os.path.join(root, "SKILL.md")):
+        files.append(os.path.join(root, "SKILL.md"))
+    if os.path.isdir(ref_dir):
+        files += [os.path.join(ref_dir, f) for f in sorted(os.listdir(ref_dir))
+                  if f.endswith(".md")]
+    known = {os.path.basename(p) for p in files}
+    index = {os.path.basename(p): _section_index(p) for p in files}
+
+    broken, total, unjudged = [], 0, []
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        rel = os.path.relpath(path, root)
+        for line in lines:
+            for m in SEC_REF_RE.finditer(line):
+                sec = m.group(1)
+                total += 1
+                head = line[max(0, m.start() - 40):m.start()]
+                tgt = _pick_target(head, known)
+                if tgt is None:
+                    unjudged.append(f"{rel} §{sec}")
+                    continue
+                if sec not in index.get(tgt, set()):
+                    broken.append(f"{rel}: §{sec} → {tgt} 无此章节")
+    return broken, total, unjudged
+
+
+# ---------------------------------------------------------------- 版本与 tag
+def _ver_tuple(s):
+    """"v1.2.3" → (1, 2, 3)；非语义化返回空元组（比较时排在最后，不当"更新"）。"""
+    s = (s or "").strip().lstrip("v")
+    return tuple(int(x) for x in s.split(".")) if SEMVER.match(s) else ()
+
+
+def version_tag_check(root, version):
+    """version 与 git tag 的一致性。非 git 仓库或仓库无 v* tag → 跳过。
+
+    返回 (warning文本, ✓文本, 跳过文本)，三者恰有一个非 None。
+    这里**不把「尚未打 tag」当问题**：预检跑在发布之前，v<version> 本来就还不存在，
+    把正常时序判成告警是最典型的自建门禁误杀。真正值得拦的只有一种——版本回退。
+    """
+    if not os.path.isdir(os.path.join(root, ".git")):
+        return None, None, "非 git 仓库，跳过"
+    try:
+        out = subprocess.run(["git", "-C", root, "tag", "-l", "v*"],
+                             capture_output=True, text=True, timeout=20).stdout
+    except Exception:
+        return None, None, "git 不可用，跳过"
+    tags = [t.strip() for t in out.splitlines() if _ver_tuple(t)]
+    if not tags:
+        return None, None, "仓库内尚无 v* tag，跳过"
+    cur = (version or "").strip()
+    if f"v{cur}" in tags:
+        return None, f"version {cur} 与 tag v{cur} 一致", None
+    latest = max(tags, key=_ver_tuple)
+    if _ver_tuple(cur) and _ver_tuple(latest) > _ver_tuple(cur):
+        return (f"version {cur} 低于已有 tag（最新 {latest}）—— 疑似版本回退", None, None)
+    return None, None, f"尚无 v{cur} tag（发布后创建；当前最新 {latest}）"
+
+
+# ---------------------------------------------------------------- 评测宣称
+# 声明"做了评测"的常见说法。命中即要求拿得出 evals/ —— 查的是"说了没做"，
+# 不是"有没有做评测"：目标平台不要求 evals/，多数技能也没做，判"没做"就是误杀。
+EVAL_CLAIM_RE = re.compile(r"评测闭环|benchmark|评估集|触发词评估|回归重跑|evals/")
+
+
+def eval_claim_check(root, fm_dir):
+    """评测「宣称—证据一致性」。返回 (warning文本, ✓文本)，均可为 None。
+
+    与「无数据不得判 FAIL」并不冲突：这里判的不是"没有评测数据"，而是
+    "文档说了有评测资产、目录里却拿不出来"（反模式 #23 立规者未自守）。
+    未做声明的技能完全不触发本项。
+    """
+    texts = []
+    for p in (os.path.join(fm_dir, "SKILL.md"),
+              os.path.join(root, "README.md"),
+              os.path.join(fm_dir, "README.md")):
+        if os.path.isfile(p):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    texts.append(f.read())
+            except OSError:
+                pass
+    hits = sorted({h for h in EVAL_CLAIM_RE.findall("\n".join(texts))})
+    if not hits:
+        return None, None
+    ev = os.path.join(root, "evals")
+    n = len([f for _, _, fs in os.walk(ev) for f in fs]) if os.path.isdir(ev) else 0
+    if n:
+        return None, f"评测宣称有据（命中「{'、'.join(hits)}」，evals/ {n} 个文件）"
+    return (f"声明了评测能力但拿不出证据：文档命中「{'、'.join(hits)}」，"
+            f"而 evals/ 缺失或为空", None)
+
+
 def main():
-    ap = argparse.ArgumentParser(description="技能发布预检工具")
+    ap = argparse.ArgumentParser(
+        description="技能发布预检工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例:
+  # 最常用：发布前按 SkillHub 规范体检当前目录
+  python3 scripts/preflight_release.py . --platform skillhub
+
+  # 严格档（低危告警也当失败），只要结果行
+  python3 scripts/preflight_release.py . --platform skillhub --strict --quiet
+
+  # 文档示例路径属误报：豁免并留痕（豁免项 key 见 --waive 的帮助文本）
+  python3 scripts/preflight_release.py . --platform skillhub --strict \\
+      --waive localpath --waive email --reason "文档示例路径, 非真实个人信息"
+""")
     ap.add_argument("target", help="待检查的目录")
-    ap.add_argument("--platform", choices=["skillhub", "github"], default="skillhub")
+    ap.add_argument("--platform", choices=["skillhub", "github"], default="skillhub",
+                    help="目标平台档（默认 skillhub）——决定必填字段与必含文件清单")
     ap.add_argument("--strict", action="store_true", help="低危告警也视为失败")
-    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--quiet", action="store_true",
+                    help="只输出结果行（便于 CI）；FAIL 的修复指引照常打印")
     ap.add_argument("--waive", action="append", default=[], metavar="项",
                     help="豁免指定 warning 项(可多次传入, 必须同时给 --reason)。"
                          f"可豁免: {', '.join(sorted(WAIVABLE_KEYS))}")
@@ -365,6 +567,7 @@ def main():
     log = (lambda s: print(s)) if not args.quiet else (lambda s: None)
 
     # frontmatter 提前解析: password_format 的自动豁免词需要技能名（自己的名字不是凭据）
+    fm_dir = root  # SKILL.md 所在目录 —— name 规范性要跟它比（官方规范: name 必须与父目录名一致）
     fm = parse_frontmatter(os.path.join(root, "SKILL.md")) if os.path.exists(os.path.join(root, "SKILL.md")) else None
     if fm is None:
         # github 平台可能是 skills/<name>/SKILL.md
@@ -373,6 +576,7 @@ def main():
             if "SKILL.md" in fns and "skills" in dp.split(os.sep):
                 skill_root = dp
                 break
+        fm_dir = skill_root
         fm = parse_frontmatter(os.path.join(skill_root, "SKILL.md"))
     exempt_names = {fm.get(k, "") for k in ("name", "slug") if fm} | {os.path.basename(root)}
 
@@ -418,6 +622,46 @@ def main():
             if not ver_ok:
                 fails.append((f"version 格式错误: {ver}",
                               "version 改成语义化 X.Y.Z（如 1.6.1）, 并与发布 tag vX.Y.Z 保持一致"))
+
+            # name 规范性（官方规范硬线；目标平台不校验 → warning 级，--strict 才阻断）
+            name = (fm.get("name") or "").strip()
+            if name:
+                dir_name = os.path.basename(os.path.abspath(fm_dir))
+                name_problems = []
+                if not NAME_RE.match(name):
+                    name_problems.append("不满足「小写字母/数字/连字符, 不以连字符开头或结尾, 无连续连字符 --」")
+                if len(name) > NAME_MAX:
+                    name_problems.append(f"长度 {len(name)} > 官方上限 {NAME_MAX}")
+                if dir_name and dir_name != name:
+                    name_problems.append(f"与父目录名不一致（目录名 {dir_name}）")
+                for pb in name_problems:
+                    msg = f"frontmatter name 不规范: {name} —— {pb}"
+                    log(f"  ⚠ {msg}")
+                    if args.strict:
+                        fails.append((msg, "改成 kebab-case 且与目录名一致（如 my-skill）, "
+                                           "并同步发布目录名、GitHub 仓库目录与所有引用"))
+                    else:
+                        warns.append(msg)
+                if not name_problems:
+                    log(f"  ✓ name 规范性（kebab-case / 与目录名一致 / ≤{NAME_MAX} 字符）")
+
+            # L2 正文体积（规范建议项；目标 ~2000 / 硬上限 5000；口径见 body_token_estimate）
+            est = body_token_estimate(os.path.join(fm_dir, "SKILL.md"))
+            if est is None:
+                log("  - SKILL.md 正文体积: 读取失败, 跳过")
+            elif est > BODY_TOKEN_LIMIT:
+                msg = (f"SKILL.md 正文体积 ≈{est} token, 超硬上限 {BODY_TOKEN_LIMIT}"
+                       f"（目标值 ~{BODY_TOKEN_TARGET}）")
+                log(f"  ⚠ {msg}")
+                if args.strict:
+                    fails.append((msg, "把清单/方法学/速查等细节下沉到 references/ 按需加载, "
+                                       "正文只留结论与指针; 改完用规范 §2 的自检命令复核"))
+                else:
+                    warns.append(msg)
+            else:
+                note = ("（已超目标值 ~%d——目标值是优秀实践中位数，不是红线）" % BODY_TOKEN_TARGET
+                        if est > BODY_TOKEN_TARGET else "")
+                log(f"  ✓ 正文体积 ≈{est} token（硬上限 {BODY_TOKEN_LIMIT}）{note}")
 
     # 3. 必含文件检查
     log("── 3. 必含文件检查 ──")
@@ -497,7 +741,63 @@ def main():
         if not own_critical and not own_warning:
             log("  ✓ 归属锚点齐备 (author + Copyright 行); homepage 仓库真实性请人工/gh api 核验")
 
-    # 6. 豁免落盘留痕（--skip-ownership 别名不进 waived, 故不落盘 —— 旧用法行为不变）
+    # 6. § 章节引用校验
+    log("── 6. § 章节引用校验 ──")
+    broken, ref_total, unjudged = ref_check(root)
+    if "dangling_ref" in waived:
+        log(f"  - 已豁免: dangling_ref（{len(broken)} 处断链）— 理由: {reason}")
+    elif broken:
+        for item in broken:
+            msg = f"章节引用断链: {item}"
+            log(f"  ⚠ {msg}")
+            if args.strict:
+                fails.append((msg, "改成目标文件里真实存在的章节号, 或把编号引用改回文字描述; "
+                                   "确属引用外部文档的编号可 --waive dangling_ref --reason \"...\""))
+            else:
+                warns.append(msg)
+    else:
+        log(f"  ✓ 已判定的 {ref_total - len(unjudged)} 处章节引用全部存在")
+    if unjudged:
+        shown = "、".join(unjudged[:8])
+        more = f" 等 {len(unjudged)} 处" if len(unjudged) > 8 else ""
+        log(f"  - 未判定 {len(unjudged)} 处（§ 前未写明目标文件，多为文件内自引用）: {shown}{more}")
+
+    # 7. 版本与 tag 一致性
+    log("── 7. 版本与 tag 一致性 ──")
+    v_warn, v_ok, v_skip = version_tag_check(root, (fm or {}).get("version", ""))
+    if "version_tag" in waived:
+        log(f"  - 已豁免: version_tag — 理由: {reason}")
+    elif v_warn:
+        log(f"  ⚠ {v_warn}")
+        if args.strict:
+            fails.append((v_warn, "确认 version 未回退; 若确为分叉版本可 "
+                                  "--waive version_tag --reason \"...\""))
+        else:
+            warns.append(v_warn)
+    elif v_ok:
+        log(f"  ✓ {v_ok}")
+    else:
+        log(f"  - {v_skip}")
+
+    # 8. 评测宣称—证据一致性
+    log("── 8. 评测宣称—证据一致性 ──")
+    e_warn, e_ok = eval_claim_check(root, fm_dir)
+    if "eval_claim" in waived:
+        log(f"  - 已豁免: eval_claim — 理由: {reason}")
+    elif e_warn:
+        log(f"  ⚠ {e_warn}")
+        if args.strict:
+            fails.append((e_warn, "二选一: 补 evals/ 评测资产, 或删掉 SKILL.md / README 里"
+                                  "「评测闭环 / benchmark / 评估集 / evals/」这类声明 —— "
+                                  "没做评测就不要写做了"))
+        else:
+            warns.append(e_warn)
+    elif e_ok:
+        log(f"  ✓ {e_ok}")
+    else:
+        log("  - 未声明评测能力, 跳过(目标平台不要求 evals/)")
+
+    # 9. 豁免落盘留痕（--skip-ownership 别名不进 waived, 故不落盘 —— 旧用法行为不变）
     if waived:
         wpath = write_waiver(root, waived, reason, suppressed, fm)
         if wpath:

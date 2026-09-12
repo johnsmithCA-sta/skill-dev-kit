@@ -3,8 +3,11 @@
 """
 eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚合）
 ====================================================================
-对标 Anthropic skill-creator 的 run_eval + aggregate_benchmark：为「带技能」与「基线」
+对标官方规范的评测循环编排（run_eval + aggregate_benchmark）：为「带技能」与「基线」
 两种运行收集输出并做断言评分，聚合为 benchmark.json，辅助判断技能是否真的提升了表现。
+
+⚠️ **双跑不自动编排**：脚本不会自己派发 with_skill / baseline 两臂——两条运行需人工并行
+发起并各自落到用例目录，再分别聚合。自动双跑当前未实现（详见 references/评测方法论.md §1.7）。
 
 用法:
   python3 eval_loop.py <evals_dir> [--run] [--aggregate] [--out benchmark.json]

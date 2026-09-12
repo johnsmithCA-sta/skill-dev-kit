@@ -21,6 +21,7 @@ setup_gh_ruleset.py — GitHub tag 保护 ruleset 一键创建工具
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -59,8 +60,13 @@ def resolve_repo(cwd):
         out = ""
     if not out:
         return None
-    out = out.replace("https://github.com/", "").replace("git@github.com:", "").replace(".git", "")
-    parts = [p for p in out.split("/") if p]
+    # 支持 https://host/owner/repo(.git) 与 git@host:owner/repo(.git) 两种形态。
+    # 用「scheme/host + 路径」的正则一次剥离，不再写死主机名 ——
+    # 写死 github.com 会漏掉 GitHub Enterprise / 自建 Git，且字面量本身就是脱敏扫描的误报源。
+    m = re.match(r"^(?:https?://|git@)([^/:]+)[/:](.+?)(?:\.git)?/?$", out)
+    if not m:
+        return None
+    parts = [p for p in m.group(2).split("/") if p]
     return "/".join(parts[:2]) if len(parts) >= 2 else None
 
 
@@ -91,14 +97,29 @@ def list_rulesets(repo):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="GitHub tag 保护 ruleset 一键创建")
+    ap = argparse.ArgumentParser(
+        description="GitHub tag 保护 ruleset 一键创建",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例:
+  # 最常用：所在仓库先干跑，只打印将发送的 JSON body（不创建）
+  python3 scripts/setup_gh_ruleset.py --dry-run
+
+  # 列出现有 rulesets（仓库默认从当前目录的 git remote 解析）
+  python3 scripts/setup_gh_ruleset.py --list
+
+  # 带可选参数：改名称与规则类型，仍然只干跑
+  python3 scripts/setup_gh_ruleset.py --dry-run --name "Tag Protection" --rules deletion,non_fast_forward
+""")
     ap.add_argument("--repo", help="owner/repo, 缺省从 git remote 解析")
-    ap.add_argument("--name", default=DEFAULT_NAME)
-    ap.add_argument("--pattern", default=DEFAULT_PATTERN)
+    ap.add_argument("--name", default=DEFAULT_NAME, help=f"ruleset 名称（默认 {DEFAULT_NAME}）")
+    ap.add_argument("--pattern", default=DEFAULT_PATTERN,
+                    help=f"生效的 ref 匹配（默认 {DEFAULT_PATTERN}，即所有 tag）")
     ap.add_argument("--rules", default=",".join(DEFAULT_RULES), help="逗号分隔的规则类型")
-    ap.add_argument("--enforcement", default="active", choices=["active", "evaluate", "disabled"])
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--enforcement", default="active", choices=["active", "evaluate", "disabled"],
+                    help="生效模式：active 生效 / evaluate 只评估不拦 / disabled 停用")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="只打印将发送的 JSON，不实际创建")
+    ap.add_argument("--list", action="store_true", help="列出现有 rulesets")
     args = ap.parse_args()
 
     repo = args.repo or resolve_repo(os.getcwd())

@@ -3,8 +3,11 @@
 """
 eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚合）
 ====================================================================
-对标 Anthropic skill-creator 的 run_eval + aggregate_benchmark：为「带技能」与「基线」
+对标官方规范的评测循环编排（run_eval + aggregate_benchmark）：为「带技能」与「基线」
 两种运行收集输出并做断言评分，聚合为 benchmark.json，辅助判断技能是否真的提升了表现。
+
+⚠️ **双跑不自动编排**：脚本不会自己派发 with_skill / baseline 两臂——两条运行需人工并行
+发起并各自落到用例目录，再分别聚合。自动双跑当前未实现（详见 references/评测方法论.md §1.7）。
 
 用法:
   python3 eval_loop.py <evals_dir> [--run] [--aggregate] [--out benchmark.json]
@@ -243,11 +246,26 @@ def aggregate(evals_dir, out_path, exts=None):
     return bench, None
 
 def main():
-    ap = argparse.ArgumentParser(description="技能评测循环编排与聚合")
-    ap.add_argument("evals_dir")
-    ap.add_argument("--run", action="store_true")
-    ap.add_argument("--aggregate", action="store_true")
-    ap.add_argument("--out", default=None)
+    ap = argparse.ArgumentParser(
+        description="技能评测循环编排与聚合",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例:
+  # 最常用：聚合本技能 evals/ 下各用例的评分，产出 benchmark.json
+  python3 scripts/eval_loop.py ./evals --aggregate
+
+  # 指定聚合输出位置，并把产物限定为 md/txt
+  python3 scripts/eval_loop.py ./evals --aggregate --out ./evals/benchmark.json --exts .md,.txt
+
+  # 先跑各用例的 run_cmd.txt 产出 output/，再聚合
+  python3 scripts/eval_loop.py ./evals --run --aggregate
+""")
+    ap.add_argument("evals_dir", help="评估集目录：其下每个子目录算一个用例")
+    ap.add_argument("--run", action="store_true",
+                    help="先执行各用例的 run_cmd.txt 产出 output/，再聚合（缺省只聚合已有结果）")
+    ap.add_argument("--aggregate", action="store_true",
+                    help="聚合各用例评分并写出 benchmark.json")
+    ap.add_argument("--out", default=None,
+                    help="聚合输出路径（默认写 <评估集目录>/benchmark.json）")
     ap.add_argument("--exts", default=None,
                     help="只统计这些扩展名的产物（逗号分隔，如 .md,.txt）；"
                          "默认按内容探测读全部非二进制文本")
