@@ -1,0 +1,2 @@
+$PY $SKILL/scripts/eval_trigger.py --help
+$PY $SKILL/scripts/eval_trigger.py . --check

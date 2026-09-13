@@ -3,6 +3,6 @@
   "category": "publish-drill",
   "assertions": [
     "--desc-check",
-    "description 质量"
+    "覆盖率"
   ]
 }

@@ -6,8 +6,14 @@ eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚�
 对标官方规范的评测循环编排（run_eval + aggregate_benchmark）：为「带技能」与「基线」
 两种运行收集输出并做断言评分，聚合为 benchmark.json，辅助判断技能是否真的提升了表现。
 
-⚠️ **双跑不自动编排**：脚本不会自己派发 with_skill / baseline 两臂——两条运行需人工并行
-发起并各自落到用例目录，再分别聚合。自动双跑当前未实现（详见 references/评测方法论.md §1.7）。
+✅ **基线对照已落地**：`baseline/` 不再只是目录约定——本脚本会用**同一套断言**
+对 `baseline/` 判一次，产出 `with_skill` / `baseline` / `delta` 对照列与顶层
+`with_skill_avg` / `baseline_avg` / `delta` / `methodology`。
+
+⚠️ **产物采集不自动派发**：脚本不会自己发起 with_skill / baseline 两条运行（那需要一个
+模型执行器），产物由用例侧生成后落到 `output/` 与 `baseline/`，本脚本负责判分与聚合。
+「无技能基线」若为结构性基线（无产物 ⇒ 0 命中），须在 `baseline/README.txt` 如实标注，
+**不得伪造模型输出**（详见 references/评测方法论.md §1.7）。
 
 用法:
   python3 eval_loop.py <evals_dir> [--run] [--aggregate] [--out benchmark.json]
@@ -30,11 +36,20 @@ eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚�
 
 评分模式（降级策略，零外部依赖）:
   1. grading.json 已存在 → 直接读取（人工/LLM 预先评分）；
-  2. 否则按 eval.json.assertions 做子串包含检查（启发式评分，evidence=命中/缺失要点）；
+  2. 否则按 eval.json.assertions 做子串包含检查（启发式评分，evidence=产物中命中的原文行）；
   3. 无任何断言 → skip（不纳入聚合）；
   4. output/ 无产物 → skip（无数据 ≠ 全错，见下）。
 
-缓存语义（v1.7.1 修正，别再踩）:
+基线对照（with-skill vs baseline）:
+  · 用例若有 baseline/ 目录 → 用**同一套断言**对该目录再判一次，得 baseline_passed/total；
+  · benchmark.json 每用例带 with_skill("n/2") / baseline("0/2") / delta，顶层带
+    with_skill_avg / baseline_avg / delta / methodology；
+  · 判分器边界写进 methodology：**子串断言判分，不是模型判分**；证据来源（real-run /
+    static-dump）逐份标注在 output/evidence.txt 头部，聚合时读入 evidence_source 字段；
+  · baseline 是**结构性基线**（不加载技能 ⇒ 不产出工程产物 ⇒ 命中 0），**不是模型运行基线**；
+  · 用例无 baseline/ → 该行 baseline/delta 为 null，不计入成对均值。
+
+缓存语义（勿踩）:
   · 启发式评分产物落盘为 grading.json，mode="heuristic-substring"，属**机器缓存**；
   · `--run` 重跑后会自动删掉这类缓存并按新产物重评；**人工预置的 grading.json
     （mode 非 heuristic-substring）一律保留**；
@@ -54,6 +69,7 @@ eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚�
   python3 eval_loop.py ./my-skill/evals --aggregate
 """
 import argparse
+import codecs
 import glob
 import json
 import os
@@ -82,6 +98,13 @@ def _is_text_file(p, probe=4096):
 
     为什么不用扩展名白名单：白名单只能覆盖"我们想到的"产物类型，
     .html / .log / .csv / .yaml 这类真实产物会被漏评，评分结果假阴性。
+
+    ⚠️ 易错点：原先直接 `chunk.decode("utf-8")`，只要 4096 字节
+    窗口的**末尾**把一个多字节字符切成两半（中文产物几乎必然发生），就抛
+    UnicodeDecodeError → 整份中文产物被判成二进制、**静默漏评**，断言假阴性。
+    实测后果：C3 的 20 KB 中文证据被跳过，2 条断言只读到 1 条，凭分数 1.0 记成 0.5。
+    改法：用增量解码器 final=False —— 「合法的 UTF-8 + 末尾可能残留半个字符」判文本，
+    真正的非法字节序列仍判二进制。
     """
     try:
         with open(p, "rb") as f:
@@ -91,7 +114,7 @@ def _is_text_file(p, probe=4096):
     if b"\x00" in chunk:
         return False
     try:
-        chunk.decode("utf-8")
+        codecs.getincrementaldecoder("utf-8")().decode(chunk, final=False)
     except UnicodeDecodeError:
         return False
     return True
@@ -122,8 +145,20 @@ def read_dir_text(d, exts=None):
                 pass
     return "\n".join(chunks)
 
+def match_line(text, key, width=120):
+    """取产物中第一条命中该断言的原文行，作为判分依据（可回查，不用「输出包含要点」搪塞）。"""
+    for ln in text.splitlines():
+        if key in ln:
+            ln = ln.strip()
+            return ln if len(ln) <= width else ln[:width] + "…"
+    return ""
+
 def heuristic_grade(eval_json, output_text):
-    """按断言做子串包含检查，生成 grading 结构。"""
+    """按断言做子串包含检查，生成 grading 结构。
+
+    evidence 字段引用**产物中命中的具体原文行**（命中不了则明确说缺失），
+    使判分依据可复核；历史写法「输出包含要点」看不出凭什么判过，已废弃。
+    """
     assertions = (eval_json or {}).get("assertions", [])
     if not assertions:
         return None
@@ -131,10 +166,11 @@ def heuristic_grade(eval_json, output_text):
     for a in assertions:
         key = a if isinstance(a, str) else a.get("text", "")
         hit = bool(key) and key in output_text
+        line = match_line(output_text, key) if hit else ""
         graded.append({
             "text": key,
             "pass": hit,
-            "evidence": ("输出包含要点" if hit else "输出缺失要点: %s" % key),
+            "evidence": ("命中: %s" % line if hit else "缺失: 产物中未找到「%s」" % key),
         })
     passed = sum(1 for g in graded if g["pass"])
     return {
@@ -144,6 +180,30 @@ def heuristic_grade(eval_json, output_text):
         "score": (passed / len(graded)) if graded else 0.0,
         "mode": "heuristic-substring",
     }
+
+def detect_evidence_source(case_dir):
+    """从 output/evidence.txt 头部读证据取得方式：real-run / static-dump / 两者兼有。
+
+    与 mode 分开表达：mode 说「怎么判分」，evidence_source 说「证据怎么来的」。
+    不改 mode="heuristic-substring" 是为了不动 invalidate_machine_grading 的缓存失效判定。
+    """
+    p = os.path.join(case_dir, "output", "evidence.txt")
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            head = f.readline().strip()
+    except Exception:
+        return None
+    real = ("真跑" in head) or ("real-run" in head)
+    static = ("静态转储" in head) or ("static-dump" in head)
+    if real and static:
+        return "real-run+static-dump"
+    if real:
+        return "real-run"
+    if static:
+        return "static-dump"
+    return None
 
 def run_case(case_dir):
     cmd_file = os.path.join(case_dir, "run_cmd.txt")
@@ -176,7 +236,7 @@ def invalidate_machine_grading(case_dir):
     只删 `mode == "heuristic-substring"` 的（机器缓存，重算无损）；
     **人工预置的 grading.json 一律保留**——那是有意的人工评分，重跑产物不该冲掉它。
 
-    ⚠️ 历史缺陷：不失效缓存的话，产物已经更新、聚合却仍读旧结论，
+    ⚠️ 易错点：不失效缓存的话，产物已经更新、聚合却仍读旧结论，
     表现为「明明全绿却报 0 分」——而 grading.json 的存在会让 mode 显示成
     `pre-graded`，看上去像人工评的，极难排查。
     """
@@ -206,16 +266,38 @@ def grade_case(case_dir, exts=None):
         return None, "skip（output/ 无产物，需先 --run）"
     g = heuristic_grade(eval_json, out_text)
     if g:
+        src = detect_evidence_source(case_dir)
+        if src:
+            g["evidence_source"] = src
         with open(os.path.join(case_dir, "grading.json"), "w", encoding="utf-8") as f:
             json.dump(g, f, ensure_ascii=False, indent=2)
         return g, "heuristic"
     return None, "skip（无 grading.json 且 eval.json 无断言）"
+
+def grade_baseline(case_dir, exts=None):
+    """对 baseline/ 目录用**同一套断言**判一次，作为「无技能」对照。
+
+    无 baseline/ 目录 → (None, "n/a")：不适用基线（如 B 类「不应触发」用例）。
+    只读产物、不落盘缓存——基线结论随产物重算，避免缓存锁死对照值。
+    """
+    bdir = os.path.join(case_dir, "baseline")
+    if not os.path.isdir(bdir):
+        return None, "n/a（无 baseline/ 目录，不适用基线）"
+    eval_json = load_json(os.path.join(case_dir, "eval.json")) or {}
+    text = read_dir_text(bdir, exts=exts)
+    if not text.strip():
+        return None, "n/a（baseline/ 无文本产物）"
+    g = heuristic_grade(eval_json, text)
+    if not g:
+        return None, "n/a（eval.json 无断言）"
+    return g, "baseline"
 
 def aggregate(evals_dir, out_path, exts=None):
     cases = sorted(d for d in glob.glob(os.path.join(evals_dir, "*")) if os.path.isdir(d))
     if not cases:
         return None, "无测试用例子目录"
     rows, tot_pass, tot_score, graded_n = [], 0, 0.0, 0
+    ws_sum, bl_sum, paired_n = 0.0, 0.0, 0
     for c in cases:
         name = os.path.basename(c)
         grading, mode = grade_case(c, exts=exts)
@@ -232,12 +314,46 @@ def aggregate(evals_dir, out_path, exts=None):
         graded_n += 1
         tot_pass += passed
         tot_score += score
-        rows.append({"case": name, "mode": mode, "passed": passed, "total": total, "score": round(score, 3)})
+        row = {
+            "case": name, "mode": mode, "passed": passed, "total": total,
+            "score": round(score, 3),
+            "with_skill": "%d/%d" % (passed, total),
+            "evidence_source": grading.get("evidence_source") or "n/a",
+        }
+        # 带技能 vs 无技能基线：同一套断言各判一次，差值即本用例的量化增益
+        b_grading, _b_mode = grade_baseline(c, exts=exts)
+        if b_grading:
+            b_passed = b_grading.get("passed", 0)
+            b_total = b_grading.get("total", 0)
+            b_score = (b_passed / b_total) if b_total else 0.0
+            row["baseline"] = "%d/%d" % (b_passed, b_total)
+            row["baseline_score"] = round(b_score, 3)
+            row["delta"] = round(score - b_score, 3)
+            ws_sum += score
+            bl_sum += b_score
+            paired_n += 1
+        else:
+            row["baseline"] = None
+            row["delta"] = None
+        rows.append(row)
+    with_skill_avg = round(ws_sum / paired_n, 3) if paired_n else 0.0
+    baseline_avg = round(bl_sum / paired_n, 3) if paired_n else 0.0
     bench = {
         "cases": len(cases),
         "graded": graded_n,
         "assertion_passed": tot_pass,
         "avg_score": round(tot_score / graded_n, 3) if graded_n else 0.0,
+        # ── 带技能 vs 基线对照（仅统计有 baseline/ 的成对用例）──
+        "with_skill_avg": with_skill_avg,
+        "baseline_avg": baseline_avg,
+        "delta": round(with_skill_avg - baseline_avg, 3),
+        "paired_cases": paired_n,
+        "methodology": {
+            "grader": "substring-assertion",
+            "grader_boundary": "判分是断言子串匹配，不是模型判分；证据为真跑产物（real-run）或静态转储（static-dump），逐份标注",
+            "baseline": "结构性基线：不加载技能时不产出对应工程产物，故命中数为 0；非模型运行基线",
+            "exit_codes": "0=PASS(≥0.7) / 2=REVIEW / 1=硬错误",
+        },
         "verdict": ("PASS" if graded_n and (tot_score / graded_n) >= 0.7 else ("REVIEW" if graded_n else "NO-DATA")),
         "detail": rows,
     }
@@ -292,13 +408,20 @@ def main():
     print("benchmark: %s" % out)
     print("用例 %d，评分 %d，断言通过 %d，均分 %.2f，判定 %s" % (
         bench["cases"], bench["graded"], bench["assertion_passed"], bench["avg_score"], bench["verdict"]))
+    if bench.get("paired_cases"):
+        print("对照 %d 个成对用例: with_skill=%.2f  baseline=%.2f  delta=%+.2f（基线为结构性基线，非模型运行）" % (
+            bench["paired_cases"], bench["with_skill_avg"], bench["baseline_avg"], bench["delta"]))
     for r in bench["detail"]:
         if "score" in r:
-            print("  %s  %s  %d/%d  score=%.2f" % (r["case"], r["mode"], r["passed"], r["total"], r["score"]))
+            extra = ("  with_skill=%s baseline=%s delta=%+.2f" % (
+                r["with_skill"], r["baseline"], r["delta"])) if r.get("baseline") else "  baseline=n/a"
+            print("  %s  %s  %d/%d  score=%.2f  [%s]%s" % (
+                r["case"], r["mode"], r["passed"], r["total"], r["score"],
+                r.get("evidence_source", "n/a"), extra))
         else:
             print("  %s  %s" % (r["case"], r["status"]))
     # PASS → 0（可放行）｜REVIEW → 2（需人工确认）｜NO-DATA → 2（未做评测，告警）
-    # 历史缺陷：此处曾把 REVIEW 判为 0，导致低分技能被 CI 放行（静默失败）
+    # 易错点：此处曾把 REVIEW 判为 0，导致低分技能被 CI 放行（静默失败）
     return {"PASS": 0}.get(bench["verdict"], 2)
 
 if __name__ == "__main__":

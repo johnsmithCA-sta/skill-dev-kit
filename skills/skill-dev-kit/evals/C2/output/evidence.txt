@@ -1,5 +1,15 @@
+# 证据取得方式: 真跑（real-run）
+# 生成命令: $PY $SKILL/scripts/eval_trigger.py --help ; $PY $SKILL/scripts/eval_trigger.py . --check
+# 生成时间: 2026-09-13 12:55
+# 说明: $PY=Python 解释器, $SKILL=技能根目录；证据正文中的本机技能根/家目录路径已归一化为 $SKILL/$HOME（包内不落本机路径），其余逐字保留
+
+=== [desc_help] 证据取得方式: 真跑（real-run） ===
 usage: eval_trigger.py [-h] [--gen] [--check] [--desc-check] [--desc DESC]
                        [--count COUNT] [--out OUT] [--threshold THRESHOLD]
+                       [--intents INTENTS] [--from-description]
+                       [--scene-words SCENE_WORDS] [--holdout HOLDOUT]
+                       [--reps REPS] [--strict]
+                       [--min-trigger-len MIN_TRIGGER_LEN]
                        [skill_dir]
 
 SKILL.md description 触发词评估工具
@@ -9,11 +19,42 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --gen
-  --check
+  --gen                 生成 should-trigger / should-not-trigger 评估集模板（需 --count
+                        指定条数）
+  --check               校验正文「触发词」章节的覆盖率（配 --from-description 改平台口径）
   --desc-check          校验 frontmatter description 质量
   --desc DESC           直接校验给定描述文本（配合 --desc-check）
-  --count COUNT
-  --out OUT
+  --count COUNT         --gen 时正 / 负样本各生成多少条（默认 10）
+  --out OUT             --gen 的评估集输出路径（默认打到标准输出）
   --threshold THRESHOLD
                         触发覆盖率阈值（默认 0.7）
+  --intents INTENTS     外部意图清单文件（JSON/txt），判定基准由你提供
+  --from-description    按 frontmatter description
+                        口径评测覆盖率（平台真实行为）；默认按正文「触发词」章节口径
+  --scene-words SCENE_WORDS
+                        本技能域内的场景词清单（JSON/txt）
+  --holdout HOLDOUT     留出集比例（默认 0=关闭；推荐
+                        0.4）。开启后按固定种子切分意图清单，训练/留出两侧分别报覆盖率，判定以留出集为准（防过拟合）
+  --reps REPS           重复独立留出切分的次数（默认 1；推荐
+                        3），输出留出集覆盖率均值±标准差；衡量的是评估集切分稳定性，不是模型随机性
+  --strict              --desc-check 时把 WARN 级项也计入失败
+  --min-trigger-len MIN_TRIGGER_LEN
+                        宽松匹配的最短触发词长度（默认 3；防止 2 字泛词虚高覆盖）
+
+示例:
+  # 最常用：校验本技能 frontmatter description 的质量（6 项静态检查）
+  python3 scripts/eval_trigger.py . --desc-check
+
+  # 直接试错一段描述文本（跳过读技能目录）
+  python3 scripts/eval_trigger.py --desc-check --desc "Helps with documents"
+
+  # 查触发词覆盖并按留出集判定（防过拟合），意图清单用本技能自己的那份
+  python3 scripts/eval_trigger.py . --check --intents evals/trigger_eval.json --holdout 0.4 --reps 3
+
+=== [trigger_run] 证据取得方式: 真跑（real-run） ===
+SKILL.md : $SKILL/SKILL.md
+触发词数 : 31
+description: 技能固化与发布工具包。当用户要"把工作流固化为 Skill、起草或完善 SKILL.md、做发布前脱敏与安全预检、打包 SkillHub zip、创建 GitH…
+预期意图 : 34（来源 evals/trigger_eval.json），命中 34，覆盖率 100%（阈值 70%）
+PASS  触发词覆盖达标
+提示  description 质量校验请单独跑: eval_trigger.py <技能目录> --desc-check

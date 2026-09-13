@@ -3,16 +3,17 @@
     {
       "text": "起草 SKILL.md",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: - 起草 SKILL.md / 完善技能 / 技能脚手架"
     },
     {
-      "text": "完善技能",
+      "text": "技能脚手架",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: - 起草 SKILL.md / 完善技能 / 技能脚手架"
     }
   ],
   "passed": 2,
   "total": 2,
   "score": 1.0,
-  "mode": "heuristic-substring"
+  "mode": "heuristic-substring",
+  "evidence_source": "static-dump"
 }

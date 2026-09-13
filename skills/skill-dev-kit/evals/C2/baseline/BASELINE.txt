@@ -1,0 +1,4 @@
+# 无技能基线（结构性基线，非模型运行）
+取得方式: 不加载本技能时，同一 prompt 下不会产出下列任一工程产物
+本用例的带技能产物: evidence.txt, desc_help_stdout.txt, trigger_check_stdout.txt
+基线产出: 无（因此断言命中数 = 0）

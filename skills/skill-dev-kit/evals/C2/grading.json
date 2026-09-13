@@ -3,16 +3,17 @@
     {
       "text": "--desc-check",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: usage: eval_trigger.py [-h] [--gen] [--check] [--desc-check] [--desc DESC]"
     },
     {
-      "text": "description 质量",
+      "text": "覆盖率",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: --check               校验正文「触发词」章节的覆盖率（配 --from-description 改平台口径）"
     }
   ],
   "passed": 2,
   "total": 2,
   "score": 1.0,
-  "mode": "heuristic-substring"
+  "mode": "heuristic-substring",
+  "evidence_source": "real-run"
 }

@@ -1,86 +1,148 @@
 {
   "cases": 11,
   "graded": 11,
-  "assertion_passed": 23,
+  "assertion_passed": 24,
   "avg_score": 1.0,
+  "with_skill_avg": 1.0,
+  "baseline_avg": 0.0,
+  "delta": 1.0,
+  "paired_cases": 8,
+  "methodology": {
+    "grader": "substring-assertion",
+    "grader_boundary": "判分是断言子串匹配，不是模型判分；证据为真跑产物（real-run）或静态转储（static-dump），逐份标注",
+    "baseline": "结构性基线：不加载技能时不产出对应工程产物，故命中数为 0；非模型运行基线",
+    "exit_codes": "0=PASS(≥0.7) / 2=REVIEW / 1=硬错误"
+  },
   "verdict": "PASS",
   "detail": [
     {
       "case": "A1",
-      "mode": "pre-graded",
+      "mode": "heuristic",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "static-dump",
+      "baseline": "0/2",
+      "baseline_score": 0.0,
+      "delta": 1.0
     },
     {
       "case": "A2",
-      "mode": "pre-graded",
+      "mode": "heuristic",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "static-dump",
+      "baseline": "0/2",
+      "baseline_score": 0.0,
+      "delta": 1.0
     },
     {
       "case": "A3",
-      "mode": "pre-graded",
-      "passed": 2,
-      "total": 2,
-      "score": 1.0
+      "mode": "heuristic",
+      "passed": 4,
+      "total": 4,
+      "score": 1.0,
+      "with_skill": "4/4",
+      "evidence_source": "real-run",
+      "baseline": "0/4",
+      "baseline_score": 0.0,
+      "delta": 1.0
     },
     {
       "case": "A4",
-      "mode": "pre-graded",
+      "mode": "heuristic",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "static-dump",
+      "baseline": "0/2",
+      "baseline_score": 0.0,
+      "delta": 1.0
     },
     {
       "case": "A5",
-      "mode": "pre-graded",
+      "mode": "heuristic",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "static-dump",
+      "baseline": "0/2",
+      "baseline_score": 0.0,
+      "delta": 1.0
     },
     {
       "case": "B1",
       "mode": "pre-graded",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "n/a",
+      "baseline": null,
+      "delta": null
     },
     {
       "case": "B2",
       "mode": "pre-graded",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "n/a",
+      "baseline": null,
+      "delta": null
     },
     {
       "case": "B3",
       "mode": "pre-graded",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "n/a",
+      "baseline": null,
+      "delta": null
     },
     {
       "case": "C1",
-      "mode": "pre-graded",
-      "passed": 3,
-      "total": 3,
-      "score": 1.0
+      "mode": "heuristic",
+      "passed": 2,
+      "total": 2,
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "real-run+static-dump",
+      "baseline": "0/2",
+      "baseline_score": 0.0,
+      "delta": 1.0
     },
     {
       "case": "C2",
-      "mode": "pre-graded",
+      "mode": "heuristic",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "real-run",
+      "baseline": "0/2",
+      "baseline_score": 0.0,
+      "delta": 1.0
     },
     {
       "case": "C3",
-      "mode": "pre-graded",
+      "mode": "heuristic",
       "passed": 2,
       "total": 2,
-      "score": 1.0
+      "score": 1.0,
+      "with_skill": "2/2",
+      "evidence_source": "static-dump",
+      "baseline": "0/2",
+      "baseline_score": 0.0,
+      "delta": 1.0
     }
   ]
 }

@@ -1,0 +1,2 @@
+$PY $SKILL/scripts/preflight_release.py . --platform skillhub
+$PY $SKILL/scripts/make_skillhub_zip.py . --out /tmp/sdk-eval-A3.zip

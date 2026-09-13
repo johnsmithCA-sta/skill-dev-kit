@@ -3,16 +3,17 @@
     {
       "text": "benchmark.json",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: 两种运行收集输出并做断言评分，聚合为 benchmark.json，辅助判断技能是否真的提升了表现。"
     },
     {
       "text": "eval_loop.py",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: # 生成命令: cat $SKILL/scripts/eval_loop.py"
     }
   ],
   "passed": 2,
   "total": 2,
   "score": 1.0,
-  "mode": "heuristic-substring"
+  "mode": "heuristic-substring",
+  "evidence_source": "static-dump"
 }

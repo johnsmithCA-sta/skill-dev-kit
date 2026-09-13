@@ -3,16 +3,17 @@
     {
       "text": "固化为技能",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: - 固化为技能 / 沉淀为 Skill / 做成技能 / 做成 Skill"
     },
     {
       "text": "沉淀为 Skill",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: - 固化为技能 / 沉淀为 Skill / 做成技能 / 做成 Skill"
     }
   ],
   "passed": 2,
   "total": 2,
   "score": 1.0,
-  "mode": "heuristic-substring"
+  "mode": "heuristic-substring",
+  "evidence_source": "static-dump"
 }

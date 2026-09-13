@@ -3,9 +3,9 @@ name: skill-dev-kit
 slug: skill-dev-kit
 displayName: 技能固化与发布工具包
 summary: 把可复用工作流固化为 Skill 并安全发布的全周期工具包：内置 16 项发布前检查清单（含归属与权益门禁，按改动类型分级裁剪）+ 8 个零依赖脚本（发布预检 preflight_release / 依赖自检 check_deps / 打包归档 make_skillhub_zip / GitHub tag 保护 setup_gh_ruleset / 触发词评估 eval_trigger / 评测循环 eval_loop / 批量体检 batch_skill_audit / 推送兜底 gh_push_files），并沉淀五层测试闭环、两轮脱敏审查、双平台发布流程与 14 条踩坑表，让后续同类技能跳过重复探索。
-description: 技能固化与发布工具包。当用户要"把工作流固化为 Skill、起草或完善 SKILL.md、做发布前脱敏与安全预检、打包 SkillHub zip、创建 GitHub tag 保护 ruleset、走双平台（SkillHub/GitHub）发布流程、沉淀可复用方法论、做技能触发词评估或评测循环"时使用。覆盖固化判定、技能目录三件套、SKILL.md 五要素、五层测试闭环（含基线双跑对照）、两轮脱敏审查、发布前 16 项检查清单（含 author/Copyright 归属门禁，按改动类型分级裁剪）、8 脚本自动化（含依赖自检与推送兜底）、触发词评估与评测循环、双平台发布、复盘与自动化反哺。内置脚本零第三方依赖（仅 Python 标准库 + 可选 gh/skillhub CLI），可直接接入 CI 门禁。
-version: 1.12.1
-last_updated: 2026-09-12
+description: 技能固化与发布工具包。当用户要"把工作流固化为 Skill、起草或完善 SKILL.md、做发布前脱敏与安全预检、打包 SkillHub zip、创建 GitHub tag 保护 ruleset、走双平台（SkillHub/GitHub）发布流程、沉淀可复用方法论、做技能触发词评估或评测循环"时使用。覆盖固化判定、技能目录三件套、SKILL.md 五要素、五层测试闭环（含基线双跑对照）、两轮脱敏审查、发布前 16 项检查清单（含 author/Copyright 归属门禁，按改动类型分级裁剪）、8 脚本自动化（含依赖自检与推送兜底）、触发词评估与评测循环、双平台发布、复盘与自动化反哺。内置脚本零第三方依赖（仅 Python 标准库 + 可选 gh/skillhub CLI），可直接接入 CI 门禁。不适用 / 不用于：技能内部业务逻辑的实现与运行期排障（属发布链路之外的事）、与技能开发无关的一次性脚本、已有成熟流水线且只想跳过检查直接发布的情形。
+version: 1.13.1
+last_updated: 2026-09-13
 license: MIT
 author: johnsmithCA-sta
 homepage: https://github.com/johnsmithCA-sta/skill-dev-kit
@@ -63,11 +63,18 @@ skill-name/
 
 **脚本参数化（脱敏与复用前提）**：硬编码路径/账号 → 环境变量或命令行参数；硬编码文件名列表 → 目录自动扫描。
 
+### 输出文件约定（发布链产物）
+
+- **输出目录**：运行期产物写到用户触发时显式指定的技能目录；发布 staging 目录为 `/tmp/<slug>-publish`；GitHub 侧落 `skills/<name>/`。
+- **命名**：SkillHub 包为 `<slug>-v<version>.zip`；GitHub 目录为 `skills/<name>/`。
+- **格式**：技能目录三件套（`SKILL.md` + `scripts/` + `references/`），包内不含 LICENSE 与 README.md。
+- **错误输出**：失败时留 `error.log`、以非零退出码结束、**不产出半成品包**。
+
 ## 三、发布前必过：16 项检查清单
 
 > 完整清单见 `references/发布检查清单.md`——逐项勾选；先按**改动分级**（T1–T6）只勾该跑的人工项，自动项永远全跑。
 
-**脚本覆盖**：`preflight_release.py` 覆盖 1/3/5/6/16 项，另查 name 规范、正文体积、§ 章节引用、版本 tag、评测宣称一致性；`check_deps.py` 管依赖声明。
+**脚本覆盖**：`preflight_release.py` 覆盖 1/3/5/6/16 项，另查 name 规范、正文体积、§ 章节引用、版本 tag、评测宣称一致性，以及**结构规范检查**（引用完整性 / description 触发面 / 保留词 / 引号卫生 / 打包卫生为告警项；包内含 README / 孤儿引用 / references 元数据 / 索引漂移 / 路由表缺 doNotUse 列只登记不判定）；`check_deps.py` 管依赖声明。
 
 发布前三条必过（对应 Constraints 红线 ①③④）：
 
@@ -79,11 +86,13 @@ skill-name/
 
 > 位于本技能 `scripts/`，纯 Python 标准库。**8 个脚本的逐条命令与退出码见 `references/脚本速查.md`。** 其中 `eval_trigger.py` 支持留出集与重复采样（防 description 过拟合），`check_deps.py` 只做静态比对（探环境需 `--probe`）。批量体检（`batch_skill_audit.py`）先扫一遍全局，再针对单个技能细查。
 
-> **自身评测闭环**：`evals/`(build_self_eval.py 生成 11 用例) + `eval_loop.py` → `benchmark.json`(自身均分 1.00 PASS)；回归重跑二者即可。
+> **自身评测闭环**：`evals/`(build_self_eval.py 生成 11 用例) + `eval_loop.py` → `benchmark.json`(自身均分 1.00 PASS，含无技能基线对照与 delta)；回归重跑二者即可。多数用例的证据取自**真跑产物**，`evals/` 下每个用例的 output 目录里，证据文件头部标注了取得方式与可独立重跑的命令。
 
 ## 五、五层测试闭环
 
 > **前置成本门：措辞先微测。** 改一句话先用小样本验证（全新上下文 + **无指导对照组** + 每个变体 5+ 次）——跑完整场景是最终关卡，不是第一关；**对照组压根不出现该失败，就没有东西要修**。五条纪律见 `references/评测方法论.md` §6。
+
+**边界输入清单**：空目录 → 报错退出、不产出空壳；超长参考文档 → 分批摘要、只取相关段落；极少匹配 → 显式报「无匹配」而不硬凑；用户中途取消 → 保留已落盘中间产物、可续跑。
 
 | 层级 | 做法 | 验收 |
 |---|---|---|
@@ -103,6 +112,7 @@ skill-name/
 - **固定规则**：按市场规模排序只调研**前 5 家**（3 头部 + 2 近 90 天新上架，双轨防幸存者偏差）；全量普查作废。
 - **产出**：5 份固定件（对比表 + 生态格局 + 独创性分析 + 竞争力速评 + 结论）。
 - **硬上限**：常规 5 家；触发式（红海信号 / 疑似直接竞品）经确认可扩至 8 家。
+- **本机生态分工**：本 kit 只负责**发布门禁与打包**；模板脚手架类技能（`skill-creator`）负责起草，业务实现类技能负责各自领域——三者边界不重叠，按需取用即可。
 
 ## 七、两轮脱敏与安全审查
 
@@ -136,6 +146,8 @@ skill-name/
 > 平台差异：SkillHub ≤10MB、按次计费、同版本不可重发；GitHub 需 `skills/<name>/SKILL.md` + README/LICENSE，不带商业化定位。
 
 **失败降级路径**：7 类高频失败（400 / 同版本已存在 / 预检 critical / warning 放行 / 扫描挂起 / 推送被拦 / tag 推错）**各有既定绕法——先查表再动手，反复重试不是方案** → `references/发布检查清单.md`。
+
+**中断续跑**：发布链中断后**按步骤号续跑**，续跑前先核对这些中间产物的落盘位置——staging 目录、changelog 文案、已推 tag（可用 `git ls-remote` 查）。
 
 ## Constraints（红线 / 默认 / 逃逸）
 

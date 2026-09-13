@@ -1,24 +1,48 @@
-=== scripts/ ===
-__pycache__
-eval_loop.py
-eval_trigger.py
-make_skillhub_zip.py
-preflight_release.py
-setup_gh_ruleset.py
-=== references/ ===
-Changelog.md
-SKILL.md 编写规范.md
-全生命周期 10 步 + 认知底座.md
-反模式清单.md
-发布检查清单.md
-复盘报告模板.md
-市场调研模板.md
-核心公式与量化基准.md
-知识分层与版本治理.md
-脚本速查.md
-调试三步法.md
-错误处理与可靠性纪律.md
-=== 发布检查清单 headline ===
+# 证据取得方式: 真跑（real-run） + 静态转储（static-dump），逐份标注见下
+# 生成命令: $PY $SKILL/scripts/preflight_release.py . --platform skillhub ; grep -m1 -h '^# ' $SKILL/references/发布检查清单.md ; grep -m1 -h 'skillhub publish' $SKILL/references/发布检查清单.md
+# 生成时间: 2026-09-13 12:55
+# 说明: $PY=Python 解释器, $SKILL=技能根目录；证据正文中的本机技能根/家目录路径已归一化为 $SKILL/$HOME（包内不落本机路径），其余逐字保留
+
+=== [preflight_run] 证据取得方式: 真跑（real-run） ===
+── 1. 敏感扫描 (61 个文本文件) ──
+  ✓ 未发现敏感信息
+── 2. frontmatter 校验 (platform=skillhub) ──
+  ✓ name=skill-dev-kit version=1.13.1 ✓
+  ✓ name 规范性（kebab-case / 与目录名一致 / ≤64 字符）
+  ✓ 正文体积 ≈4252 token（硬上限 5000）（已超目标值 ~2000——目标值是优秀实践中位数，不是红线）
+── 3. 必含文件检查 ──
+  ✓ SKILL.md
+  ✓ scripts/ (8 个文件)
+── 4. git 未跟踪文件 ──
+  - 非 git 仓库, 跳过
+── 5. 归属检查 ──
+  ✓ author = johnsmithCA-sta
+  ✓ LICENSE 版权行: Copyright (c) 2026 johnsmithCA-sta
+  ✓ 归属锚点齐备 (author + Copyright 行); homepage 仓库真实性请人工/gh api 核验
+── 6. § 章节引用校验 ──
+  ✓ 已判定的 43 处章节引用全部存在
+  - 未判定 108 处（§ 前未写明目标文件，多为文件内自引用）: SKILL.md §六、SKILL.md §七、SKILL.md §九、SKILL.md §三、SKILL.md §三、SKILL.md §一、SKILL.md §五、SKILL.md §六 等 108 处
+── 7. 版本与 tag 一致性 ──
+  - 非 git 仓库，跳过
+── 8. 评测宣称—证据一致性 ──
+  ✓ 评测宣称有据（命中「benchmark、evals/、回归重跑、触发词评估、评测闭环」，evals/ 37 个文件）
+── 9. 结构规范检查 ──
+  ✓ description 触发面达标（无自称构式 / 有动作动词 / 有排他边界与触发词示例）
+  ✓ 引用完整性（已核 10 处包内路径；按占位符/外部路径跳过 5 处）
+  ✓ 无 README.md
+  ✓ 保留词（frontmatter 无 claude/anthropic）
+  ✓ 无孤儿引用
+  ✓ references 加载元数据（14 份齐备）
+  ✓ references 路由句式（14 份均为强路由句式）
+  - 索引体量漂移: 无 references/README.md 或索引无体量列，跳过
+  ✓ frontmatter 引号卫生（无裸冒号 / 英文冒号 / 多行纯量）
+  ✓ 打包卫生（无 .bak/.tmp/~$/.swp）
+  - 路由表 doNotUse: 无路由表，跳过
+
+结果: PASS (全部通过)
+
+=== [checklist] 证据取得方式: 静态转储（static-dump） ===
+=== grep -m1 -h '^# ' $SKILL/references/发布检查清单.md ===
 # 技能发布前必过检查清单（16 项）
-=== 一键执行顺序 publish 行 ===
-skillhub publish <技能目录> --dry-run --json
+=== grep -m1 -h 'skillhub publish' $SKILL/references/发布检查清单.md ===
+- **不可逆步骤不受分级影响**：实发（`skillhub publish` / `git push` / 打 tag）在任何改动类型下都要 dry-run + 目录快照 + 人工确认。

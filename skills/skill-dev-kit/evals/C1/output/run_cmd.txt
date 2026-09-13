@@ -1,0 +1,2 @@
+$PY $SKILL/scripts/preflight_release.py . --platform skillhub
+grep -m1 -h '^# ' $SKILL/references/发布检查清单.md ; grep -m1 -h 'skillhub publish' $SKILL/references/发布检查清单.md

@@ -1,0 +1,36 @@
+── 1. 敏感扫描 (61 个文本文件) ──
+  ✓ 未发现敏感信息
+── 2. frontmatter 校验 (platform=skillhub) ──
+  ✓ name=skill-dev-kit version=1.13.1 ✓
+  ✓ name 规范性（kebab-case / 与目录名一致 / ≤64 字符）
+  ✓ 正文体积 ≈4252 token（硬上限 5000）（已超目标值 ~2000——目标值是优秀实践中位数，不是红线）
+── 3. 必含文件检查 ──
+  ✓ SKILL.md
+  ✓ scripts/ (8 个文件)
+── 4. git 未跟踪文件 ──
+  - 非 git 仓库, 跳过
+── 5. 归属检查 ──
+  ✓ author = johnsmithCA-sta
+  ✓ LICENSE 版权行: Copyright (c) 2026 johnsmithCA-sta
+  ✓ 归属锚点齐备 (author + Copyright 行); homepage 仓库真实性请人工/gh api 核验
+── 6. § 章节引用校验 ──
+  ✓ 已判定的 43 处章节引用全部存在
+  - 未判定 108 处（§ 前未写明目标文件，多为文件内自引用）: SKILL.md §六、SKILL.md §七、SKILL.md §九、SKILL.md §三、SKILL.md §三、SKILL.md §一、SKILL.md §五、SKILL.md §六 等 108 处
+── 7. 版本与 tag 一致性 ──
+  - 非 git 仓库，跳过
+── 8. 评测宣称—证据一致性 ──
+  ✓ 评测宣称有据（命中「benchmark、evals/、回归重跑、触发词评估、评测闭环」，evals/ 37 个文件）
+── 9. 结构规范检查 ──
+  ✓ description 触发面达标（无自称构式 / 有动作动词 / 有排他边界与触发词示例）
+  ✓ 引用完整性（已核 10 处包内路径；按占位符/外部路径跳过 5 处）
+  ✓ 无 README.md
+  ✓ 保留词（frontmatter 无 claude/anthropic）
+  ✓ 无孤儿引用
+  ✓ references 加载元数据（14 份齐备）
+  ✓ references 路由句式（14 份均为强路由句式）
+  - 索引体量漂移: 无 references/README.md 或索引无体量列，跳过
+  ✓ frontmatter 引号卫生（无裸冒号 / 英文冒号 / 多行纯量）
+  ✓ 打包卫生（无 .bak/.tmp/~$/.swp）
+  - 路由表 doNotUse: 无路由表，跳过
+
+结果: PASS (全部通过)

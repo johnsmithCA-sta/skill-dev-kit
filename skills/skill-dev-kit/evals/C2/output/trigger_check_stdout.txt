@@ -1,0 +1,6 @@
+SKILL.md : $SKILL/SKILL.md
+触发词数 : 31
+description: 技能固化与发布工具包。当用户要"把工作流固化为 Skill、起草或完善 SKILL.md、做发布前脱敏与安全预检、打包 SkillHub zip、创建 GitH…
+预期意图 : 34（来源 evals/trigger_eval.json），命中 34，覆盖率 100%（阈值 70%）
+PASS  触发词覆盖达标
+提示  description 质量校验请单独跑: eval_trigger.py <技能目录> --desc-check

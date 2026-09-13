@@ -1,23 +1,19 @@
 {
   "assertions": [
     {
-      "text": "preflight_release.py",
-      "pass": true,
-      "evidence": "输出包含要点"
-    },
-    {
-      "text": "skillhub publish",
-      "pass": true,
-      "evidence": "输出包含要点"
-    },
-    {
       "text": "16 项",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: # 技能发布前必过检查清单（16 项）"
+    },
+    {
+      "text": "preflight_release.py",
+      "pass": true,
+      "evidence": "命中: # 生成命令: $PY $SKILL/scripts/preflight_release.py . --platform skillhub ; grep -m1 -h '^# ' $SKILL/references/发布检查清单.md ; …"
     }
   ],
-  "passed": 3,
-  "total": 3,
+  "passed": 2,
+  "total": 2,
   "score": 1.0,
-  "mode": "heuristic-substring"
+  "mode": "heuristic-substring",
+  "evidence_source": "real-run+static-dump"
 }

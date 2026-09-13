@@ -1,0 +1,3 @@
+✓ 打包完成: /tmp/sdk-eval-A3.zip
+  文件数: 48 | 大小: 206.4 KB (0.20 MB) | version: 1.13.1
+结果: PASS

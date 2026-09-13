@@ -3,16 +3,17 @@
     {
       "text": "技能调试",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: - 技能调试（没触发 / 不生效）/ 评测技能 / 跑 benchmark / 触发词评估"
     },
     {
       "text": "没触发",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: - 技能调试（没触发 / 不生效）/ 评测技能 / 跑 benchmark / 触发词评估"
     }
   ],
   "passed": 2,
   "total": 2,
   "score": 1.0,
-  "mode": "heuristic-substring"
+  "mode": "heuristic-substring",
+  "evidence_source": "static-dump"
 }

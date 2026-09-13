@@ -117,12 +117,21 @@ def extract_triggers(text):
     return out
 
 def extract_frontmatter_description(text):
+    """读 frontmatter 的 description。**值可跨行**：缩进续行按 YAML 纯量规则折成一行。
+
+    ⚠️ 必须折行（实测）：`health-report-trend-analysis` 的 description 写成
+    未加引号的多行纯量，只取首行的旧实现读到 87 字（真值 290 字）——后续质量校验全部
+    基于残缺文本，症状指向「缺触发词」，真因却是「值被解析器截断」。诊断错因比漏报更坏。
+    """
     m = re.search(r"^---\s*\n(.*?)\n---\s*$", text, re.S | re.M)
     if not m:
         return ""
     fm = m.group(1)
-    d = re.search(r"^description:\s*(.*)$", fm, re.M)
-    return d.group(1).strip().strip('"\'' ) if d else ""
+    d = re.search(r"^description:[ \t]*(.*(?:\n[ \t]+\S.*)*)", fm, re.M)
+    if not d:
+        return ""
+    val = " ".join(part.strip() for part in d.group(1).splitlines())
+    return val.strip().strip('"\'')
 
 # ---------------------------------------------------------------- 归一化比对
 def norm(s):
@@ -156,7 +165,7 @@ def coverage(triggers, intents, min_trigger_len=3):
 
 # ---------------------------------------------------------------- 评估集生成（--gen）
 # ⚠️ 这两份清单只是「模板素材」，供 --gen 生成骨架后由人工替换。
-#    它们取自本技能的语境，**不得用于判定其他技能**（历史缺陷：拿这 20 条去测 8 个
+#    它们取自本技能的语境，**不得用于判定其他技能**（易错点：拿这 20 条去测 8 个
 #    技能，7 个判 0%，工具被绕过）。--check 判定只认 --intents 或目标技能自带的
 #    evals/trigger_eval.json；两者都没有时输出 REVIEW(2)，不判 FAIL。
 DEFAULT_INTENTS = [
@@ -201,6 +210,7 @@ ACTION_VERBS_CN = [
     "上传", "下载", "编辑", "格式化", "分析", "识别", "合成", "合并", "拆分", "清理", "去重",
     "回测", "模拟", "监控", "推送", "分类", "摘要", "翻译", "检索", "筛选", "统计", "上报",
     "构建", "部署", "管理", "追踪", "备份", "恢复", "测试", "调试", "获取", "抓取", "聚合",
+    "排查", "诊断", "定位", "观测", "体检", "归一化", "判定", "分级",
 ]
 ACTION_VERBS_EN = re.compile(
     r"\b(?:extract|create|generate|convert|parse|validate|build|publish|review|check|scan|"
@@ -211,6 +221,12 @@ ACTION_VERBS_EN = re.compile(
 SCENE_PATTERNS = [
     re.compile(r"\.(?:pdf|docx|xlsx|pptx|ppt|zip|json|csv|md|txt|html|yaml|yml|xml|png|jpg|jpeg|mp4|enex|kml|geojson|doc|xls)\b", re.I),
     re.compile(r"\b(?:pdf|word|excel|ppt|powerpoint|zip|json|csv|markdown|skill|api|sql|kline|yaml|xml)\b", re.I),
+    # 第三类：**不带词边界的 ASCII 缩写**。中文文案里 `API余额` / `CSS 变量` 紧贴汉字，
+    # `\b` 因汉字也算 \w 而失配（Python re 的 \w 含 CJK），故单列一条。
+    # 2026-09-12 实测：`ai-subscription-manager`（含 API）、`wcag-contrast-ci`（含 CSS / WCAG）
+    # 都因这条失配被误报「缺场景或文件类型」。
+    re.compile(r"(?:API|HTML|CSS|SCSS|SVG|SQL|JSON|CSV|PDF|Excel|Word|PowerPoint|PPT|"
+               r"YAML|XML|Markdown|WCAG|Token)", re.I),
 ]
 # 「已知场景提示词」，不是合格性白名单。
 # 未命中只说明"这个域的场景词不在这份提示里"，不等于描述里没有场景。
@@ -228,12 +244,25 @@ HOW_SIGNALS = [
     re.compile(r"\bhow\s+to\b|\bstep[- ]by[- ]step\b|\bsteps?\s+to\b|\bprocedure\b", re.I),
 ]
 BOUNDARY_SIGNALS = [
-    re.compile(r"不用于|不做|不适用|不做什么|不负责|不可用于|不得|仅用于|仅限|仅当|仅支持|"
-               r"只用于|专门用于|专用于|专为|时使用|而非|不含|不涉及|排除|除外|边界|红线|"
-               r"何时不用|不需要|仅|当.{0,60}时"),
-    re.compile(r"\bonly\s+for\b|\bnot\s+for\b|\bwhen\b|\bexclusive\b|\bspecifically\s+for\b|"
-               r"\bdedicated\s+to\b|\brather\s+than\b|\bunlike\b|\bnever\b", re.I),
+    # 排他边界（我方规范 §7.1 策略 4 的正名）——**只收真正排他的措辞**。
+    # ⚠️ 2026-09-12 收紧：旧表含裸「仅」「边界」「红线」「时使用」与 `当.{0,60}时`，
+    #    它们是 WHEN（何时用）信号，不是边界（何时不用）。后果实测：18 技能里只有 2 个
+    #    被判「缺排他边界」，而人工核出 5 个真缺 —— 词表过松比过严更危险，因为它制造的
+    #    是「已检查过」的错觉。
+    re.compile(r"不用于|不使用|不做|不适用|不做什么|不负责|不可用于|不得|不予|不支持|"
+               r"仅用于|仅限|仅当|仅支持|仅接受|只用于|只处理|专门用于|专用于|专为|"
+               r"不在.{0,8}范围|不处理|不覆盖|不承担|不承接|不包含|不涉及|不回答|"
+               r"排除在外|除外|而非|区别于|何时不用|不需要|无需"),
+    re.compile(r"\bonly\s+for\b|\bnot\s+for\b|\bdo\s+not\s+use\b|\bdon'?t\s+use\b|"
+               r"\bnot\s+applicable\b|\bout\s+of\s+scope\b|\bnot\s+intended\b|"
+               r"\brather\s+than\b|\bunlike\b|\bnever\b|\bexclusive\b", re.I),
 ]
+# 触发词示例信号：description 里有没有把「用户会怎么说」列出来。
+# 两种合法写法（都算给出示例）：
+#   ① 引号包裹的具体说法 —— 「提升仓库曝光」「0 下载怎么办」
+#   ② 显式引导段 + 并列项 —— 触发词：公平竞争审查、审查一下这份政策、……
+TRIGGER_EXAMPLE_MARKER = re.compile(r"(触发词|关键词|triggers?)\s*[:：]")
+TRIGGER_EXAMPLE_QUOTES = re.compile(r"[「『“\"'][^」』”\"']{2,}[」』”\"']")
 # 「流程摘要」信号 —— description 不得概括流程步骤。
 # 为什么：description 是常驻上下文里唯一的内容，正文按需加载。description 一旦把结论
 # 说完，agent 就会走这条捷径、正文失去被读取的理由，技能退化成一行 prompt。
@@ -252,11 +281,11 @@ FLOW_SIGNALS = [
 
 
 def run_desc_check(desc, scene_words=None, strict=False):
-    """description 6 项静态质量校验，分两级。
+    """description 7 项静态质量校验，分两级。
 
     FAIL 级（命中即不合格）：自称构式 / 无动作动词 —— 这两项决定技能会不会被正确触发。
-    WARN 级（默认只提示，--strict 时计入失败）：缺场景 / 含 how / 缺排他边界 / 含流程摘要
-      —— 这四项与"技能域"和"措辞习惯"强相关，用封闭词表判它们不合格会误杀域外写法。
+    WARN 级（默认只提示，--strict 时计入失败）：缺场景 / 含 how / 缺排他边界 / 缺触发词示例 /
+      含流程摘要 —— 这五项与"技能域"和"措辞习惯"强相关，用封闭词表判它们不合格会误杀域外写法。
 
     返回退出码（0=PASS / 1=FAIL）。
     """
@@ -285,6 +314,11 @@ def run_desc_check(desc, scene_words=None, strict=False):
     checks.append(("含排他边界词", "WARN", has_boundary,
                    "缺少排他边界（何时不用/不做什么/仅用于）" if not has_boundary else ""))
 
+    has_example = bool(TRIGGER_EXAMPLE_MARKER.search(desc)) or bool(TRIGGER_EXAMPLE_QUOTES.search(desc))
+    checks.append(("含触发词示例", "WARN", has_example,
+                   "未见触发词示例（建议列 3-5 个用户会说的具体说法，"
+                   "如「触发词：A、B、C」或引号包裹的说法）" if not has_example else ""))
+
     flow = [p.pattern for p in FLOW_SIGNALS if p.search(desc)]
     checks.append(("无流程摘要（不写步骤序列）", "WARN", not flow,
                    "疑似概括了流程: %s（description 只写能力标签 + 触发场景，"
@@ -310,7 +344,7 @@ def run_desc_check(desc, scene_words=None, strict=False):
     if warn_n:
         print("PASS  description 达标（%d 项 WARN 建议；--strict 可将 WARN 计为失败）" % warn_n)
         return 0
-    print("PASS  description 质量达标（6/6）")
+    print("PASS  description 质量达标（7/7）")
     return 0
 
 

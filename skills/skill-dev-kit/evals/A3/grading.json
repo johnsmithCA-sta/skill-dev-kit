@@ -1,18 +1,29 @@
 {
   "assertions": [
     {
-      "text": "发布预检",
+      "text": "preflight_release.py",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: # 生成命令: $PY $SKILL/scripts/preflight_release.py . --platform skillhub ; $PY $SKILL/scripts/make_skillhub_zip.py . --out …"
     },
     {
-      "text": "打包 SkillHub",
+      "text": "结果: PASS",
       "pass": true,
-      "evidence": "输出包含要点"
+      "evidence": "命中: 结果: PASS (全部通过)"
+    },
+    {
+      "text": "打包完成",
+      "pass": true,
+      "evidence": "命中: ✓ 打包完成: /tmp/sdk-eval-A3.zip"
+    },
+    {
+      "text": "version",
+      "pass": true,
+      "evidence": "命中: ✓ name=skill-dev-kit version=1.13.1 ✓"
     }
   ],
-  "passed": 2,
-  "total": 2,
+  "passed": 4,
+  "total": 4,
   "score": 1.0,
-  "mode": "heuristic-substring"
+  "mode": "heuristic-substring",
+  "evidence_source": "real-run"
 }
