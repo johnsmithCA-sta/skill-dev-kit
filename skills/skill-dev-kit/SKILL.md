@@ -4,7 +4,7 @@ slug: skill-dev-kit
 displayName: 技能固化与发布工具包
 summary: 把可复用工作流固化为 Skill 并安全发布的全周期工具包：内置 16 项发布前检查清单（含归属与权益门禁，按改动类型分级裁剪）+ 8 个零依赖脚本（发布预检 preflight_release / 依赖自检 check_deps / 打包归档 make_skillhub_zip / GitHub tag 保护 setup_gh_ruleset / 触发词评估 eval_trigger / 评测循环 eval_loop / 批量体检 batch_skill_audit / 推送兜底 gh_push_files），并沉淀五层测试闭环、两轮脱敏审查、双平台发布流程与 14 条踩坑表，让后续同类技能跳过重复探索。
 description: 技能固化与发布工具包。当用户要"把工作流固化为 Skill、起草或完善 SKILL.md、做发布前脱敏与安全预检、打包 SkillHub zip、创建 GitHub tag 保护 ruleset、走双平台（SkillHub/GitHub）发布流程、沉淀可复用方法论、做技能触发词评估或评测循环"时使用。覆盖固化判定、技能目录三件套、SKILL.md 五要素、五层测试闭环（含基线双跑对照）、两轮脱敏审查、发布前 16 项检查清单（含 author/Copyright 归属门禁，按改动类型分级裁剪）、8 脚本自动化（含依赖自检与推送兜底）、触发词评估与评测循环、双平台发布、复盘与自动化反哺。内置脚本零第三方依赖（仅 Python 标准库 + 可选 gh/skillhub CLI），可直接接入 CI 门禁。不适用 / 不用于：技能内部业务逻辑的实现与运行期排障（属发布链路之外的事）、与技能开发无关的一次性脚本、已有成熟流水线且只想跳过检查直接发布的情形。
-version: 1.15.0
+version: 1.16.0
 last_updated: 2026-09-30
 license: MIT
 author: johnsmithCA-sta
@@ -220,4 +220,4 @@ skill-name/
 | 评测方法论.md | Grader 六铁律 + 双轨设计 + 用例标准 + 构建路线图 + 留出集 | 做评测时 |
 | 复盘报告模板.md | 五段式复盘模板 | 交付后复盘 |
 | 知识产权边界与护城河判定.md | 反向检查 + 护城河三要素 + 对外双轨制（§6.1 版本说明）+ 资产边界（§七） | 发布前 IP 自查 |
-| Changelog.md | 版本史（用户侧口径） | 追溯变更 |
+| Changelog.md | 版本发布说明 | 追溯变更 |

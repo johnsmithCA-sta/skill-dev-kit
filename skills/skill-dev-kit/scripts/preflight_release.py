@@ -1032,7 +1032,9 @@ def _is_table_sep(line):
 #     · `面向.{0,10}用户` → 命中规范正文自身 ⇒ 收窄为「目标受众 / 受众说明 / 本技能面向」；
 #     · `重跑一次` → 命中用户侧操作说明 ⇒ 收窄为「改动本技能 / 发布本技能前 / 发布前先清」；
 #     · `付费技能|商业化` → 命中支付类技能的**领域词**与规范正文 ⇒ 收窄为「商业化定位（」等标注形态。
-# 只查对外入口两个文件：references/ 与 evals/ 是档案与评测资产，不受「对外入口」约束。
+# 检查面：对外入口（SKILL.md / README.md）+ 版本档案（Changelog / 版本说明）——前者是使用者
+#   第一眼看到的，后者是发版时对外展示的，二者都在「用户可见」范围内。
+#   其余 references/（rubric、gates、脚本说明等）属执行轨，不受本检查约束。
 DEV_PROCESS_RULES = [
     ("版本归属标注",
      re.compile(r"[（(]\s*v\d+\.\d+\.\d+\s*[）)]|自\s*v\d+\.\d+\.\d+\s*起"
@@ -1050,8 +1052,52 @@ DEV_PROCESS_RULES = [
     ("过程数字",
      re.compile(r"覆盖率\s*\d|→\s*\d+\s*字符"),
      "删过程数字，保留结论"),
+    ("写作规则自曝",
+     re.compile(r"（用户侧口径）|（内部口径）|（用户轨）|（执行轨）"
+                r"|只写[^。\n]{0,25}(?:能|可)感知的变化|只保留(?:使用者|用户)可感知"),
+     "删掉「这份说明是过滤给谁看的」这类元说明——版本说明本就写给使用者，"
+     "声明口径等于告诉读者另有一版内部记录"),
 ]
+
+# 版本档案专属规则（更严）：版本说明的**读者就是使用者**，其中出现「本文分几类 / 写给谁看」
+#   这类对写作规则本身的说明即是自曝。放在这里而非通用词表，是因为 skill-dev-kit 这类
+#   **以「怎么写版本说明」为主题的技能**，其方法论文档（references/ 属执行轨）必然出现这些词
+#   ——2026-09-30 校准实测：并入通用词表时 3 处命中全部是误报。
+CHANGELOG_ONLY_RULES = [
+    ("写作规则自曝",
+     re.compile(r"四类条目|按四类|新增能力\s*/\s*优化体验"),
+     "版本说明里不解释「本文分几类、写给谁看」——直接写内容本身"),
+]
+
 DEV_PROCESS_FILES = ("SKILL.md", "README.md")
+
+
+CHANGELOG_NAME_KEYS = ("changelog", "版本说明", "版本历史", "版本发布", "更新日志")
+
+
+def changelog_targets(root):
+    """发现对外可见的版本档案（根目录与 references/ 下的 Changelog / 版本说明）。
+
+    为什么补扫（2026-09-30 实证）：某技能对外包把整篇开发口径的变更史与数十处具名记录留在
+    references/ 里，而本检查当时只覆盖 SKILL.md / README.md ⇒ 结构性放行、必然 PASS。
+    版本档案是发版时对外展示的文本，与对外入口同属「用户可见」范围。
+
+    ⚠️ 名称匹配只认「版本说明 / 版本历史 / 版本发布 / 更新日志 / changelog」这几种**版本档案**
+    形态；「版本治理 / 版本台账」这类方法论文档与内部台账属执行轨，不在此列——2026-09-30
+    校准实测：用「文件名含『版本』」宽匹配会把 skill-dev-kit 自己的方法论文档误判成版本档案。
+    """
+    out = []
+    for sub in ("", "references"):
+        d = os.path.join(root, sub) if sub else root
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".md"):
+                continue
+            low = fn.lower()
+            if any(k in low for k in CHANGELOG_NAME_KEYS):
+                out.append(os.path.relpath(os.path.join(d, fn), root))
+    return out
 
 # DEV_PROCESS_CANDIDATES —— 候选池（人工审查新发现的形态，待下轮按误报率<10%校准后入正式规则）：
 #   · 「点名/贬损评分卡」：references/ 里对第三方产品打分定性（如「65 分 B 级」「评分卡」），
@@ -1061,9 +1107,16 @@ DEV_PROCESS_FILES = ("SKILL.md", "README.md")
 
 
 def dev_process_check(root):
-    """对外入口是否含开发过程信息。返回 [(文件, 行号, 类别, 片段)]；frontmatter 不计。"""
+    """对外可见文档是否含开发过程信息。返回 [(文件, 行号, 类别, 片段)]。
+
+    对外入口（SKILL.md / README.md）跳过 frontmatter；版本档案**不跳过**——
+    其 summary 会随市场展示对外可见，同样算「用户可见」文本。
+    """
     hits = []
-    for name in DEV_PROCESS_FILES:
+    cl = set(changelog_targets(root))
+    targets = [(n, True) for n in DEV_PROCESS_FILES]          # 对外入口：跳过 frontmatter
+    targets += [(n, False) for n in sorted(cl)]               # 版本档案：frontmatter 也查
+    for name, skip_fm in targets:
         path = os.path.join(root, name)
         if not os.path.isfile(path):
             continue
@@ -1072,17 +1125,18 @@ def dev_process_check(root):
                 lines = f.read().splitlines()
         except (OSError, UnicodeDecodeError):
             continue
-        in_fm = False       # 正在 frontmatter 内
-        fm_done = False     # frontmatter 已结束（只认文件开头那一段）
+        rules = DEV_PROCESS_RULES + (CHANGELOG_ONLY_RULES if name in cl else [])
+        in_fm = False            # 正在 frontmatter 内
+        fm_done = not skip_fm    # frontmatter 已结束（只认文件开头那一段）
         for i, line in enumerate(lines, 1):
-            if not fm_done and line.strip() == "---":
+            if skip_fm and not fm_done and line.strip() == "---":
                 in_fm = not in_fm
                 if not in_fm:
                     fm_done = True
                 continue
             if in_fm:
                 continue
-            for label, rx, _hint in DEV_PROCESS_RULES:
+            for label, rx, _hint in rules:
                 if rx.search(line):
                     hits.append((name, i, label, line.strip()[:80]))
                     break
