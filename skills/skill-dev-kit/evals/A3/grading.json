@@ -8,7 +8,7 @@
     {
       "text": "结果: PASS",
       "pass": true,
-      "evidence": "命中: 结果: PASS (全部通过)"
+      "evidence": "命中: 结果: PASS (含 1 项告警, 建议人工确认)"
     },
     {
       "text": "打包完成",
@@ -18,7 +18,7 @@
     {
       "text": "version",
       "pass": true,
-      "evidence": "命中: ✓ name=skill-dev-kit version=1.13.1 ✓"
+      "evidence": "命中: ✓ name=skill-dev-kit version=1.15.0 ✓"
     }
   ],
   "passed": 4,

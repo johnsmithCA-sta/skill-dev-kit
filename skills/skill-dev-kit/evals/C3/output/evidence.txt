@@ -1,6 +1,6 @@
 # 证据取得方式: 静态转储（static-dump）
 # 生成命令: cat $SKILL/scripts/eval_loop.py
-# 生成时间: 2026-09-13 12:55
+# 生成时间: 2026-09-30 17:27
 # 说明: $PY=Python 解释器, $SKILL=技能根目录；证据正文中的本机技能根/家目录路径已归一化为 $SKILL/$HOME（包内不落本机路径），其余逐字保留
 
 === [loop_src] 证据取得方式: 静态转储（static-dump） ===
@@ -211,19 +211,35 @@ def detect_evidence_source(case_dir):
         return "static-dump"
     return None
 
-def run_case(case_dir):
+def run_case(case_dir, skill_root, py_bin, allow_exec):
+    """执行用例的 run_cmd.txt（占位符模板），产出 output/。
+
+    run_cmd.txt 是被审技能自带的测试命令，属不可信输入（供应链面）：
+    - 执行前打印待执行命令；
+    - 必须显式 --allow-exec 才真正执行（默认拒绝，避免对第三方技能「回归重跑」= 执行其任意命令）；
+    - 占位符替换 + cwd=技能根，与 build_self_eval.py 的 run() 口径一致（R-16）。
+    """
+    # R-5：run_cmd.txt 兼容两个位置（历史产物由 build_self_eval.py 落在 output/ 下）
     cmd_file = os.path.join(case_dir, "run_cmd.txt")
-    out_dir = os.path.join(case_dir, "output")
+    if not os.path.isfile(cmd_file):
+        cmd_file = os.path.join(case_dir, "output", "run_cmd.txt")
     if not os.path.isfile(cmd_file):
         return False, "无 run_cmd.txt，跳过执行"
     with open(cmd_file, encoding="utf-8") as f:
         cmd = f.read().strip()
     if not cmd:
         return False, "run_cmd.txt 为空"
+    real = (cmd.replace("$SKILL", skill_root)
+               .replace("$PY", py_bin)
+               .replace("$HOME", os.path.expanduser("~")))
+    print("     待执行: %s" % real)
+    if not allow_exec:
+        return False, "未加 --allow-exec，拒绝执行（run_cmd.txt 是技能自带命令，属不可信输入）"
+    out_dir = os.path.join(case_dir, "output")
     os.makedirs(out_dir, exist_ok=True)
     t0 = time.time()
     try:
-        r = subprocess.run(cmd, shell=True, cwd=case_dir, capture_output=True, text=True, timeout=300)
+        r = subprocess.run(real, shell=True, cwd=skill_root, capture_output=True, text=True, timeout=300)
         dt = time.time() - t0
         with open(os.path.join(out_dir, "_stdout.txt"), "w", encoding="utf-8") as f:
             f.write(r.stdout or "")
@@ -263,7 +279,10 @@ def grade_case(case_dir, exts=None):
     eval_json = load_json(os.path.join(case_dir, "eval.json")) or {}
     grading = load_json(os.path.join(case_dir, "grading.json"))
     if grading:
-        return grading, "pre-graded"
+        # R-18：原样透出 grading.json 里的真实 mode（机器缓存 heuristic-substring 与人工评分要区分），
+        # 不要一律标 pre-graded —— 那会把机器缓存伪装成人工评分，证据溯源失真
+        mode = grading.get("mode") or "pre-graded"
+        return grading, mode
     out_text = read_dir_text(os.path.join(case_dir, "output"), exts=exts)
     # ⚠️ 无产物 = 无数据，不是「全错」。曾经在此照常打分并落盘 0 分 grading.json，
     # 既违反评测方法论 §1.1（无数据不得判 FAIL），又会把下一轮真跑出来的产物
@@ -391,6 +410,9 @@ def main():
     ap.add_argument("--exts", default=None,
                     help="只统计这些扩展名的产物（逗号分隔，如 .md,.txt）；"
                          "默认按内容探测读全部非二进制文本")
+    ap.add_argument("--allow-exec", action="store_true",
+                    help="--run 时真正执行各用例 run_cmd.txt（该文件是技能自带命令，属不可信输入；"
+                         "不加本开关则只打印待执行命令、拒绝执行）")
     args = ap.parse_args()
     exts = tuple(e.strip() for e in args.exts.split(",") if e.strip()) if args.exts else None
 
@@ -399,12 +421,23 @@ def main():
         print("FAIL  目录不存在: %s" % evals_dir)
         return 1
     out = args.out or os.path.join(evals_dir, "benchmark.json")
+    # R-16：run_cmd.txt 里的命令相对「技能根」执行（evals_dir 的父目录），占位符 $SKILL/$PY 在此解析
+    skill_root = os.path.dirname(evals_dir)
+    py_bin = sys.executable
 
     if args.run:
+        ran, skipped = 0, 0
         for c in sorted(glob.glob(os.path.join(evals_dir, "*"))):
             if os.path.isdir(c):
-                ok, msg = run_case(c)
+                ok, msg = run_case(c, skill_root, py_bin, args.allow_exec)
                 print(("RUN  " if ok else "SKIP ") + os.path.basename(c) + "  " + msg)
+                if ok:
+                    ran += 1
+                else:
+                    skipped += 1
+        # R-5：--run 下 0 例真正执行 = 静默失败，必须醒目告警（否则 PASS 是无执行的空转）
+        if ran == 0:
+            print("WARN  --run 下 0 例真正执行（%d 例跳过）。若预期会跑，检查 run_cmd.txt 位置或加 --allow-exec" % skipped)
 
     bench, err = aggregate(evals_dir, out, exts=exts)
     if err:

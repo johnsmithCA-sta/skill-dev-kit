@@ -118,6 +118,13 @@ EXTRA_WAIVABLE = {
     # §9.9 打包卫生 —— warning。打包脚本排除名单只含 .pyc/.pyo 与 __pycache__，
     # 而 .bak/.tmp/~$*/.swp **不在名单里** ⇒ 这类文件真会被打进 SkillHub 包（真缺口）。
     "pack_hygiene": "打包卫生：临时/备份文件（.bak/.tmp/~$*/.swp）会被打进 SkillHub 包",
+    # §9.11 面向用户端写作（编写规范 §4.1）—— 对外入口不得含开发过程信息。
+    # 词表按「新规则先跑存量样本、误报率 <10%」校准（2026-09-19，26 个本地技能的 SKILL.md + README.md）。
+    "dev_process": "面向用户端写作(§4.1)：SKILL.md / README 含开发过程信息（版本治理章、实测日期与过程数据、治理口吻、维护者指令、商业意图）",
+    # 转手发布语义风险（2026-09-30 补齐三缺口，一律 warning，不判 critical）：
+    "external_ref": "外部不可达引用：正文《书名号》引用指向内部知识库/私有文档（对外不可达）",
+    "naming_exposure": "命名曝光：references/ 点名第三方产品并评分/贬损（转手发布时对外可见）",
+    "enum_mismatch": "门槛枚举不一致：文档声明的 M 门槛编号集合与脚本实现不一致",
 }
 # 可豁免全集 = 敏感规则里的 warning 级 + 结构性告警项
 WAIVABLE_KEYS = {k for k, (lv, _) in RULE_INDEX.items() if lv == "warning"} | set(EXTRA_WAIVABLE)
@@ -586,8 +593,8 @@ def _pick_target(text, known):
     """在文本前缀里找出被引用的目标文件：取**结束位置最靠后**（即离 § 最近）的那个。
 
     先按远近、再按长短：`…错误处理与可靠性纪律.md`（第三步）、SKILL.md §十` 里最近的
-    是 SKILL.md；而 `` `references/SKILL.md 编写规范.md` §4.1 `` 里 `SKILL.md` 与
-    `SKILL.md 编写规范.md` 起始位置相同，长名结束更靠后，因此不会被同名短文件抢走。
+    是 SKILL.md；而 `` `references/SKILL.md编写规范.md` §4.1 `` 里 `SKILL.md` 与
+    `SKILL.md编写规范.md` 起始位置相同，长名结束更靠后，因此不会被同名短文件抢走。
     """
     cands = [(text.rfind(n) + len(n), len(n), n) for n in known if n in text]
     return max(cands)[2] if cands else None
@@ -744,8 +751,9 @@ def file_ref_check(root):
     ⚠️ 四条防误报硬规则（每条都来自 2026-09-12 实测误报，缺一条就会重犯）：
       1. 串内含 `...` → 跳过（徽章示例 `...blue.svg` 被当成真实引用）
       2. 串含 `xxx` / `yyy` / `your*` / `<` `>` → 跳过（占位示例、外部技能路径）
-      3. **整串即路径时按完整串解析，禁止按空格切分** —— `references/SKILL.md 编写规范.md`
-         会被切成 `references/SKILL.md`（我方命名合法，**勿改名**）
+      3. **整串即路径时按完整串解析，禁止按空格切分** —— 其他技能可能存在含空格文件名，
+         按空格切分会被截成首词（如 `references/全生命周期 10 步 + 认知底座.md` 会被截成
+         `references/全生命周期`）
       4. 命中 `<skill>/…` 形态 → SKIP（外部技能路径），不判 FAIL
     另外：`scripts/` 这类目录引用、以及相对 `references/` 解析的引用都算命中。
     """
@@ -772,8 +780,8 @@ def file_ref_check(root):
             skipped += 1
             continue
         if prefix_re.match(seg):
-            # 规则 3：**整串即路径时按完整串解析**（`references/SKILL.md 编写规范.md` 含空格，
-            # 按空格切分会被截成 `references/SKILL.md`）。逐个吸收后续词，取**第一个真实存在**
+            # 规则 3：**整串即路径时按完整串解析**——其他技能可能存在含空格文件名，按空格切分
+            # 会被截成首词。逐个吸收后续词，取**第一个真实存在**
             # 的组合；一个都不存在时保留首个词。这样 `scripts/x.py --help` 不会被整串当路径，
             # 而 `references/全生命周期 10 步 + 认知底座.md` 这种多词文件名也不会被截断。
             toks = seg.split()
@@ -1016,6 +1024,71 @@ def _is_table_sep(line):
     return "-" in s and "|" in s
 
 
+# §9.11 面向用户端写作（编写规范 §4.1）：对外入口（SKILL.md / README.md）不得含开发过程信息。
+# 词表按「新规则先跑存量样本、误报率 <10%」校准（2026-09-19，26 个本地技能的 SKILL.md + README.md）：
+#   保留项全部真命中——「实测日期与过程」24 处、「治理口吻」2 处、「过程叙述」1 处；
+#   初版的 4 条规则在存量上**全部是误报**，已按要求收窄或删除：
+#     · 版本号泛匹 `v\d+\.\d+\.\d+` → 命中 git 命令示例 / 外部文档版本 / 业务版本号 ⇒ 收窄为归属标注形态；
+#     · `面向.{0,10}用户` → 命中规范正文自身 ⇒ 收窄为「目标受众 / 受众说明 / 本技能面向」；
+#     · `重跑一次` → 命中用户侧操作说明 ⇒ 收窄为「改动本技能 / 发布本技能前 / 发布前先清」；
+#     · `付费技能|商业化` → 命中支付类技能的**领域词**与规范正文 ⇒ 收窄为「商业化定位（」等标注形态。
+# 只查对外入口两个文件：references/ 与 evals/ 是档案与评测资产，不受「对外入口」约束。
+DEV_PROCESS_RULES = [
+    ("版本归属标注",
+     re.compile(r"[（(]\s*v\d+\.\d+\.\d+\s*[）)]|自\s*v\d+\.\d+\.\d+\s*起"
+                r"|v\d+\.\d+\.\d+\s*(?:新增|起支持|开始支持)"),
+     "正文别写版本号归属，只留能力本身；版本史放 references/Changelog.md"),
+    ("实测日期与过程",
+     re.compile(r"\d{4}-\d{2}-\d{2}[^\n]{0,40}(?:实测|调研|修复|新增|上线|复盘|踩坑)"),
+     "删日期与过程数据，只保留对使用者有用的结论"),
+    ("过程叙述",
+     re.compile(r"本次(?:实测|最大|新增)|当天实测"),
+     "改写成不依赖「本次 / 当天」的规则表述"),
+    ("治理口吻",
+     re.compile(r"唯一事实源|事实源对齐|版本口径"),
+     "改中性表述（如「完整版本史见…」）"),
+    ("过程数字",
+     re.compile(r"覆盖率\s*\d|→\s*\d+\s*字符"),
+     "删过程数字，保留结论"),
+]
+DEV_PROCESS_FILES = ("SKILL.md", "README.md")
+
+# DEV_PROCESS_CANDIDATES —— 候选池（人工审查新发现的形态，待下轮按误报率<10%校准后入正式规则）：
+#   · 「点名/贬损评分卡」：references/ 里对第三方产品打分定性（如「65 分 B 级」「评分卡」），
+#     转手发布时对外可见。该形态已由 naming_exposure_check 覆盖（S-5 收窄 references 豁免），
+#     未来可评估并入 dev_process（当前 references/ 仍受「对外入口」豁免，暂不并入）。
+#   ⚠️ 候选池不入 DEV_PROCESS_RULES：未经误报率校准就上规则，会让门禁学会被无视。
+
+
+def dev_process_check(root):
+    """对外入口是否含开发过程信息。返回 [(文件, 行号, 类别, 片段)]；frontmatter 不计。"""
+    hits = []
+    for name in DEV_PROCESS_FILES:
+        path = os.path.join(root, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        in_fm = False       # 正在 frontmatter 内
+        fm_done = False     # frontmatter 已结束（只认文件开头那一段）
+        for i, line in enumerate(lines, 1):
+            if not fm_done and line.strip() == "---":
+                in_fm = not in_fm
+                if not in_fm:
+                    fm_done = True
+                continue
+            if in_fm:
+                continue
+            for label, rx, _hint in DEV_PROCESS_RULES:
+                if rx.search(line):
+                    hits.append((name, i, label, line.strip()[:80]))
+                    break
+    return hits
+
+
 def route_donotuse_check(root):
     """§9.10 路由表是否含 doNotUse 列（「不路由到」）。返回 'missing' / 'ok' / None。
 
@@ -1037,6 +1110,180 @@ def route_donotuse_check(root):
         low = s.lower()
         return "ok" if any(k in low for k in ROUTE_DONOTUSE_KEYS) else "missing"
     return None
+
+
+# ---------------------------------------------------------------- 外部不可达引用（S-2 反向）
+# 现有 ref_check / file_ref_check 都是「正向」（查包内引用存在性）；这里补「反向」——
+# 正文《书名号》引用通常指向内部知识库/私有文档名，转手发布后对外不可达。
+# ⚠️ 只报「形似内部文档」的书名号：公开出版物（纯英文书名、含 书/白皮书/指南/规范/标准/
+#    手册/报告/出版社/ISBN 等特征）与本技能 references 自身文件名（合法内部引用）一律跳过，
+#    宁可漏不可误报（反模式 #22）。
+EXTERNAL_REF_RE = re.compile(r"《([^》]{2,40})》")
+# 内部文档特征词：命中即报
+EXTERNAL_REF_INTERNAL_KW = re.compile(r"深调|调研|复盘|内部|纪要|竞品|深访|访谈|审查|走查|工作记录|实操|沉淀|梳理")
+# 公开出版物特征：命中即跳过
+EXTERNAL_REF_PUBLIC_KW = re.compile(r"书|白皮书|指南|规范|标准|手册|报告|论文|皮书|志|史|译|著|出版社|ISBN|版|权威|入门|实战|教程")
+# 元术语（规则自身讲解时举例的书名号，如《书名号》，不是真实引用）
+EXTERNAL_REF_META_KW = re.compile(r"书名号|引用|路径|坐标")
+# 分支 B 兜底的最短长度：短于此的书名号多为公开书名（《三体》《红楼梦》），不报
+EXTERNAL_REF_MIN_LEN = 8
+
+
+def external_ref_check(root):
+    """外部不可达引用检查。返回 [(文件, 书名号内容)]。"""
+    ref_dir = os.path.join(root, "references")
+    own_stems = set()
+    if os.path.isdir(ref_dir):
+        own_stems = {os.path.splitext(f)[0] for f in os.listdir(ref_dir) if f.endswith(".md")}
+    files = []
+    if os.path.isfile(os.path.join(root, "SKILL.md")):
+        files.append(os.path.join(root, "SKILL.md"))
+    if os.path.isdir(ref_dir):
+        files += [os.path.join(ref_dir, f) for f in sorted(os.listdir(ref_dir)) if f.endswith(".md")]
+    hits, seen = [], set()
+    for path in files:
+        text = scan_text(path)
+        if not text:
+            continue
+        rel = os.path.relpath(path, root)
+        for m in EXTERNAL_REF_RE.finditer(text):
+            inner = m.group(1).strip()
+            if inner in seen or inner in own_stems:
+                continue
+            if not re.search(r"[\u4e00-\u9fff]", inner):          # 纯英文/数字书名 → 公开出版物
+                continue
+            if EXTERNAL_REF_PUBLIC_KW.search(inner):              # 公开出版物特征词
+                continue
+            if EXTERNAL_REF_META_KW.search(inner):                # 元术语举例
+                continue
+            if not (EXTERNAL_REF_INTERNAL_KW.search(inner)
+                    or len(inner) >= EXTERNAL_REF_MIN_LEN):        # 无内部特征且过短 → 保守不报
+                continue
+            seen.add(inner)
+            hits.append((rel, inner))
+    return hits
+
+
+# ---------------------------------------------------------------- 命名曝光（S-5 references 豁免收窄）
+# dev_process_check 只查对外入口 SKILL.md / README.md，references/ 完全豁免；但转手发布场景下
+# references/ 里「点名第三方产品 + 贬损/评分」内容同样对外可见。产品名是开放集合不可穷举，
+# 故用「评分/贬损」的可静态匹配形态做锚点（反模式 #N3：语义形态做启发式、低误报优先）。
+# 「竞品/点名」单独出现不做锚点（市场调研模板里全是「竞品」，独立触发会大量误报）。
+# ⚠️ 2026-09-30 DSH 全库标定：「评分卡」是中性高频词（评分表/输出格式语境），误报 3/3=100% ⇒ 已删，
+# 只保留「评分+等级」共现形态（\d+ 分 X 级）这一真锚点。
+NAMING_EXPOSURE_RULES = [
+    ("评分等级卡", re.compile(r"\d+\s*分\s*[ABCDS]\s*级")),
+    ("点名贬损", re.compile(r"(?:竞品|点名|评审|评测)[^\n]{0,20}(?:垃圾|拉胯|短板|落后|劣势|缺陷|敷衍|粗糙|难用|鸡肋|差劲|不友好)")),
+]
+
+
+def naming_exposure_check(root):
+    """references/ 命名曝光检查。返回 [(文件, 行号, 片段)]。"""
+    d = os.path.join(root, "references")
+    if not os.path.isdir(d):
+        return []
+    hits = []
+    for fn in sorted(f for f in os.listdir(d) if f.endswith(".md")):
+        path = os.path.join(d, fn)
+        text = scan_text(path)
+        if not text:
+            continue
+        rel = os.path.relpath(path, root)
+        for i, line in enumerate(text.splitlines(), 1):
+            for label, rx in NAMING_EXPOSURE_RULES:
+                if rx.search(line):
+                    hits.append((rel, i, label, line.strip()[:80]))
+                    break
+    return hits
+
+
+# ---------------------------------------------------------------- 门槛枚举一致性（S-3 宣称-实现）
+# 文档宣告的「门槛/级别枚举」与脚本实现的枚举集合不一致（真实案例：02-gates.md 宣告 M1–M5 五门槛，
+# score.py 的 GATE_KEYS 却只 M1–M4 四键，导致 M5 命中无法判 D）。
+# 只对「门槛型技能」触发——文档里确实出现 M 门槛编号序列（如 M1–M4、M1/M2/M3/M4/M5）；
+# 其他技能完全不触发，避免误报。
+ENUM_SEQ_RE = re.compile(r"M\d+(?:\s*(?:[–\-—/、，,]\s*)?M\d+)+")
+SCRIPT_KEYS_RE = re.compile(r'([A-Za-z_]\w*)\s*=\s*\(\s*"M\d+"(?:\s*,\s*"M\d+")*\s*\)')
+
+
+def _expand_enum(seq):
+    """把 M 编号序列展开成集合：range（M1–M4）展开区间，枚举（M1/M2/M3）逐项收录。"""
+    nums = [int(n) for n in re.findall(r"M(\d+)", seq)]
+    if not nums:
+        return set()
+    if len(nums) == 2 and re.search(r"[–\-—]", seq) and not re.search(r"[/、，,]", seq):
+        lo, hi = min(nums), max(nums)
+        return {f"M{i}" for i in range(lo, hi + 1)}
+    return {f"M{n}" for n in nums}
+
+
+def _fmt_keys(keys):
+    return "、".join(sorted(keys, key=lambda k: int(k[1:])))
+
+
+def _doc_gate_keys(root):
+    """SKILL.md + references/*.md 里声明的 M 门槛编号集合。"""
+    ref_dir = os.path.join(root, "references")
+    files = []
+    if os.path.isfile(os.path.join(root, "SKILL.md")):
+        files.append(os.path.join(root, "SKILL.md"))
+    if os.path.isdir(ref_dir):
+        files += [os.path.join(ref_dir, f) for f in sorted(os.listdir(ref_dir)) if f.endswith(".md")]
+    keys = set()
+    for path in files:
+        text = scan_text(path)
+        if not text:
+            continue
+        for m in ENUM_SEQ_RE.finditer(text):
+            keys |= _expand_enum(m.group(0))
+    return keys
+
+
+def _script_gate_keys(root):
+    """scripts/*.py 里「门槛键集合」定义（变量名含 GATE/门槛，形如 GATE_KEYS = ("M1", "M2", ...)）。
+
+    限定变量名（2026-09-30 DSH 全库标定）：不区分变量名会把领域状态码（如 K 线趋势的
+    `m_state = ("M1","M2")`）误判成门槛，信噪比 1:1。只认含 GATE/门槛 的变量名。
+    """
+    d = os.path.join(root, "scripts")
+    if not os.path.isdir(d):
+        return set()
+    keys = set()
+    for fn in sorted(f for f in os.listdir(d) if f.endswith(".py")):
+        text = scan_text(os.path.join(d, fn)) or ""
+        for m in SCRIPT_KEYS_RE.finditer(text):
+            varname = m.group(1)
+            if not re.search(r"GATE|门槛|gate", varname):
+                continue
+            keys |= {f"M{n}" for n in re.findall(r'"M(\d+)"', m.group(0))}
+    return keys
+
+
+def enum_consistency_check(root):
+    """门槛枚举一致性。返回 (level, msg)：('critical'|'warning'|'ok', 文本) 或 (None, None)。
+
+    方向分级（2026-09-30 DSH 追证，二者危险性相反）：
+    - 脚本 ⊂ 文档（文档宣称的门槛未实现）→ critical：可漏判，是安全缺口
+    - 脚本 ⊃ 文档（文档未收录已实现门槛）→ warning：照文档调用会缺键报错，改文档即可
+    """
+    doc_keys = _doc_gate_keys(root)
+    if not doc_keys:
+        return None, None
+    script_keys = _script_gate_keys(root)
+    if not script_keys:
+        # 文档有门槛声明但脚本未见 GATE 键集合定义——保守不判（可能用了别的键名，避免误报）
+        return None, None
+    if doc_keys == script_keys:
+        return "ok", f"门槛枚举一致（文档与脚本均为 {_fmt_keys(script_keys)}）"
+    missing_impl = doc_keys - script_keys   # 文档有、脚本没有 → 门槛未实现（高危）
+    if missing_impl:
+        return ("critical",
+                f"门槛未实现：文档宣称 {_fmt_keys(doc_keys)}，脚本仅实现 {_fmt_keys(script_keys)}"
+                f"（缺 {_fmt_keys(missing_impl)}，命中将无法判级）")
+    doc_stale = script_keys - doc_keys      # 脚本有、文档没有 → 文档陈旧（低危）
+    return ("warning",
+            f"文档未收录已实现门槛：脚本实现 {_fmt_keys(script_keys)}，文档仅写 {_fmt_keys(doc_keys)}"
+            f"（缺 {_fmt_keys(doc_stale)}，照文档调用会缺键报错）")
 
 
 def main():
@@ -1363,7 +1610,7 @@ def main():
             parts.append("建议项未过（" + "、".join(d_warns) + "）")
         _emit("desc_face",
               "description 触发面: " + "；".join(parts),
-              "按 references/SKILL.md 编写规范.md §二 五要素 #1 补「适用 / 不适用」与口语触发词示例；"
+              "按 references/SKILL.md编写规范.md §二 五要素 #1 补「适用 / 不适用」与口语触发词示例；"
               "明细跑 scripts/eval_trigger.py <技能目录> --desc-check")
     else:
         log("  ✓ description 触发面达标（无自称构式 / 有动作动词 / 有排他边界与触发词示例）")
@@ -1468,6 +1715,59 @@ def main():
     else:
         log("  ✓ 路由表 doNotUse（表头已含「不路由 / Do NOT route」）")
 
+    # 9.11 面向用户端写作（§4.1）：对外入口不得含开发过程信息（warning / 可豁免 dev_process）
+    dp_hits = dev_process_check(root)
+    if dp_hits:
+        shown = "；".join(f"{f}:{ln} {lb}" for f, ln, lb, _s in dp_hits[:3])
+        more = f" 等 {len(dp_hits)} 处" if len(dp_hits) > 3 else ""
+        _emit("dev_process",
+              f"面向用户端写作: 对外入口含开发过程信息 {len(dp_hits)} 处（{shown}{more}）",
+              "按 references/SKILL.md编写规范.md §4.1 改写：删日期与过程数据、版本归属、治理口吻、"
+              "维护者指令、商业意图；案例与复盘移出发布包；确属能力背书可 "
+              "--waive dev_process --reason \"...\"")
+    else:
+        log("  ✓ 面向用户端写作（对外入口无开发过程信息）")
+
+    # 9.12 外部不可达引用（S-2 反向：正文《书名号》指向内部/私有文档）
+    # ⚠️ 2026-09-30 DSH 全库标定：误报 69–76%——「长度≥8」兜底分支把公开法规/国标判成内部文档，
+    # 可达性信息不在标题里、判据本身不可修 ⇒ 降级为 info 只登记不判定，待换「绝对路径/文件系统
+    # 存在性/内部语境」等可判定信号后再升回 warning。
+    ext_refs = external_ref_check(root)
+    if ext_refs:
+        shown = "；".join(f"《{t}》" for _, t in ext_refs[:3])
+        more = f" 等 {len(ext_refs)} 处" if len(ext_refs) > 3 else ""
+        _sec("info",
+             f"外部不可达引用: 正文书名号引用可能指向内部知识库/私有文档 {len(ext_refs)} 处（{shown}{more}）—— 仅登记，请人工判断可达性", "")
+    else:
+        log("  ✓ 外部不可达引用（正文无指向内部/私有文档的书名号）")
+
+    # 9.13 命名曝光（S-5：references/ 点名第三方产品并评分/贬损，warning / 可豁免 naming_exposure）
+    nam_hits = naming_exposure_check(root)
+    if nam_hits:
+        shown = "；".join(f"{f}:{ln} {lb}" for f, ln, lb, _s in nam_hits[:3])
+        more = f" 等 {len(nam_hits)} 处" if len(nam_hits) > 3 else ""
+        _emit("naming_exposure",
+              f"命名曝光: references/ 含第三方评分/贬损内容 {len(nam_hits)} 处（{shown}{more}）",
+              "转手发布前对点名对象做脱敏或中性化改写；确属能力背书可 "
+              "--waive naming_exposure --reason \"...\"")
+    else:
+        log("  ✓ 命名曝光（references/ 无第三方评分/贬损内容）")
+
+    # 9.14 门槛枚举一致性（S-3：文档宣告的 M 门槛与脚本实现一致；方向分级见 enum_consistency_check）
+    en_level, en_msg = enum_consistency_check(root)
+    if en_level == "critical":
+        log(f"  ✗ [高危] {en_msg}")
+        fails.append((en_msg, "补实现文档宣称但脚本缺失的 M 门槛（安全缺口，不可豁免）；"
+                              "若该门槛确不存在，改文档删掉虚标"))
+    elif en_level == "warning":
+        _emit("enum_mismatch", en_msg,
+              "更新文档的 M 门槛编号以收录已实现的门槛（照文档调用会缺键报错）；"
+              "确属刻意裁剪可 --waive enum_mismatch --reason \"...\"")
+    elif en_level == "ok":
+        log(f"  ✓ {en_msg}")
+    else:
+        log("  - 门槛枚举一致性: 文档无 M 门槛声明，跳过")
+
     # 10. 豁免落盘留痕（--skip-ownership 别名不进 waived, 故不落盘 —— 旧用法行为不变）
     if waived:
         wpath = write_waiver(root, waived, reason, suppressed, fm)
@@ -1477,7 +1777,9 @@ def main():
     # 结果
     log("")
     if fails:
-        print(f"结果: FAIL ({len(fails)} 项高危问题, 禁止发布)")
+        # 措辞区分：fails 里既有 critical（真高危：凭据/门槛未实现）也有 --strict 下的 warning
+        # 告警，统一叫「高危问题」会误导；改「阻断」中性表述（2026-09-30 DSH R-9）。
+        print(f"结果: FAIL ({len(fails)} 项阻断, 禁止发布)")
         # 修复指引不受 --quiet 抑制: CI 里只看见 "FAIL" 却不知道改哪儿, 门禁就只是在制造噪音
         print("修复指引:")
         for i, (item, hint) in enumerate(fails, 1):

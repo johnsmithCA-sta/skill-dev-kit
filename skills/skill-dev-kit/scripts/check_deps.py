@@ -65,6 +65,10 @@ STDLIB_FALLBACK = {
     "tempfile", "textwrap", "threading", "time", "timeit", "tokenize", "traceback",
     "types", "typing", "unicodedata", "unittest", "urllib", "uuid", "venv", "warnings",
     "wave", "weakref", "xml", "xmlrpc", "zipfile", "zlib",
+    # 2026-09-30 DSH 全库标定补齐：3.9 兜底表缺这些常用 stdlib（codecs 等）会被误判为第三方依赖，
+    # 导致 macOS 默认 python3(3.9) 下 check_deps 自检 FAIL。
+    "asyncio", "binascii", "bz2", "code", "codecs", "gc", "genericpath", "locale",
+    "ntpath", "posixpath", "selectors", "stat",
 }
 
 REQ_FILES = ("requirements.txt", "dependencies.txt", "scripts/requirements.txt")

@@ -55,7 +55,7 @@ eval_trigger.py — SKILL.md description 触发词评估工具
   请加 --from-description。
 
 工作原理（desc-check 模式）:
-  对 description 做 6 项静态校验（规则来源：详见 references/SKILL.md 编写规范.md §七）：
+  对 description 做 6 项静态校验（规则来源：详见 references/SKILL.md编写规范.md §七）：
   FAIL 级 2 项：自称构式（我可以/本助手/I can…）/ 无动作动词 —— 命中即不合格；
   WARN 级 4 项：缺场景或文件类型 / 含 how 描述 / 缺排他边界 / 含流程摘要
                 —— 默认只提示，--strict 时才计入失败。
@@ -193,7 +193,7 @@ def gen_eval_set(count):
     }
 
 # ---------------------------------------------------------------- description 质量校验（--desc-check）
-# 规则来源：description 五策略 + 三条硬性规则（详见 references/SKILL.md 编写规范.md §七）
+# 规则来源：description 五策略 + 三条硬性规则（详见 references/SKILL.md编写规范.md §七）
 # ⚠️ 只匹配「自称构式」——描述里技能在说自己。
 #    用户口语触发词里的「我的订阅 / 我要导出 / 我想查余额」是标准的关键词罗列写法，
 #    曾经被这条规则判违规：**按规范写出的内容被规范自己的检查器判为违反规范**。
@@ -339,7 +339,7 @@ def run_desc_check(desc, scene_words=None, strict=False):
             warn_n += 1
 
     if fail_n:
-        print("FAIL  description 有 %d 项不合格，请对照 references/SKILL.md 编写规范.md §七 修订" % fail_n)
+        print("FAIL  description 有 %d 项不合格，请对照 references/SKILL.md编写规范.md §七 修订" % fail_n)
         return 1
     if warn_n:
         print("PASS  description 达标（%d 项 WARN 建议；--strict 可将 WARN 计为失败）" % warn_n)
@@ -423,7 +423,13 @@ def split_holdout(intents, ratio, seed=0):
 
 
 # ---------------------------------------------------------------- main
+# --check 与 --desc-check 同时传时，desc-check 的退出码暂存于此，由入口处取较严一侧
+_COMBINED = {"desc_rc": None}
+
+
 def main():
+    # --check 与 --desc-check 同时传时的 desc-check 退出码暂存（见入口处合并逻辑）
+    global _COMBINED
     ap = argparse.ArgumentParser(
         description="SKILL.md description 触发词评估工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -465,7 +471,10 @@ def main():
                     help="宽松匹配的最短触发词长度（默认 3；防止 2 字泛词虚高覆盖）")
     args = ap.parse_args()
 
-    # desc-check 模式：优先于 --gen / 默认 check
+    # desc-check 模式
+    # ⚠️ 2026-09-19：原实现此处 `return run_desc_check(...)` 会**吞掉同时传入的 --check**
+    #    （`--check --desc-check` 静默只跑 desc-check，使用者以为两侧都验过）⇒ 改为两者都跑，
+    #    退出码取更严格的一侧（desc-check 非 0 优先）。
     if args.desc_check or args.desc is not None:
         desc = args.desc
         if desc is None:
@@ -486,7 +495,12 @@ def main():
             if err:
                 print("REVIEW  " + err)
                 return 2
-        return run_desc_check(desc, scene_words=scene_words, strict=args.strict)
+        rc_desc = run_desc_check(desc, scene_words=scene_words, strict=args.strict)
+        # 同时传 --check 时**不早退**：继续往下跑覆盖率检查，两侧结果都打印，
+        # 退出码在入口处合并（取较严一侧）。原先此处无条件 return 会静默吞掉 --check。
+        if not args.check or not args.skill_dir:
+            return rc_desc
+        _COMBINED["desc_rc"] = rc_desc
 
     if not args.skill_dir:
         ap.error("缺少技能目录参数（或使用 --desc-check --desc <文本>）")
@@ -626,4 +640,8 @@ def main():
     return 0
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc = main()
+    # 组合模式（--check --desc-check）：覆盖率已通过但 desc-check 未过时，退出码取较严一侧
+    if _rc == 0 and _COMBINED["desc_rc"]:
+        _rc = _COMBINED["desc_rc"]
+    sys.exit(_rc)

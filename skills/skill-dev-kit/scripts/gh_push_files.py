@@ -10,8 +10,12 @@ gh_push_files.py — git push 不可用时的兜底：用 GitHub Contents API �
 
 适用场景
   · 首次推送一个本地建的仓库（无需 git remote 可用）
+    ⚠️ **全新空仓只能走本脚本这条 Contents API 路线**：空仓对 Git Data API
+    （blob / tree / commit / ref）一律回 `409 Git Repository is empty`，
+    所以「先取 ref 再组 tree」的单提交类脚本（如工作区的 gh_api_push.py）
+    在空仓上必然失败——它们要靠既有分支。本脚本逐文件 PUT，首个 PUT 即建 default 分支。
   · 只改少数文件、不需要本地 git 历史
-  不适用：需要保留完整提交历史 / 大量文件（逐文件 PUT 会慢）
+  不适用：需要保留完整提交历史 / 大量文件（逐文件 PUT 会慢，且一文件一提交）
 
 用法
   python3 gh_push_files.py <本地目录> <owner/repo> [branch] [commit message]
@@ -69,6 +73,8 @@ def main():
                                  "不要把真实仓库名写死在本技能里")
     ap.add_argument("branch", nargs="?", default="main", help="目标分支（默认 main）")
     ap.add_argument("message", nargs="?", default="sync via Contents API", help="提交信息")
+    ap.add_argument("--apply", action="store_true",
+                    help="真正执行 PUT（默认 dry-run：只打印将推送的文件清单与目标仓库，不落远端）")
     args = ap.parse_args()
 
     repo_dir, slug = args.repo_dir, args.slug
@@ -79,8 +85,21 @@ def main():
         print(f"❌ 仓库不可达或未认证：{slug}\n   {err[:200]}")
         return 1
 
+    files = list(walk_files(repo_dir))
+    if not files:
+        print("无文件可推送")
+        return 1
+    print(f"目标: {slug}@{branch}（{len(files)} 个文件）")
+    for _, rel in files:
+        print(f"  - {rel}")
+    # R-19：默认 dry-run，先打印清单与目标，确认无误后加 --apply 才真正 PUT
+    #（slug 误输即推到错误远端、可覆盖既有文件、一文件一提交难回滚）
+    if not args.apply:
+        print(f"\n[dry-run] 未加 --apply，未实际推送。确认清单无误后加 --apply 执行。")
+        return 0
+
     ok, failed = [], []
-    for full, rel in walk_files(repo_dir):
+    for full, rel in files:
         with open(full, "rb") as fh:
             content = base64.b64encode(fh.read()).decode()
         payload = {"message": message, "content": content, "branch": branch}
