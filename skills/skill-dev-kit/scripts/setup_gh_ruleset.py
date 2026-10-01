@@ -130,16 +130,37 @@ def print_probe_hint():
 
 
 def list_rulesets(repo):
-    """列出现有 rulesets，并**带上 conditions** —— 空 conditions 等于形同虚设，
-    不把它显示出来，这种「建了但没在拦」的状态就只能等出事才发现。"""
-    jq = ('.[] | .name + " | " + .target + " | " + .enforcement'
-          ' + " | refs=" + ((.conditions.ref_name.include // []) | join(","))'
-          ' + " | id=" + (.id | tostring)')
-    ok, out = gh("api", f"repos/{repo}/rulesets", "--jq", jq)
+    """列出现有 rulesets（含 conditions）。返回 [(id, name, target, enforcement, include_list)]。
+
+    ⚠️ **列表接口不返回 conditions** —— `GET /rulesets` 的字段里根本没有它，只有
+    `_links/created_at/enforcement/id/name/node_id/source/source_type/target/updated_at`。
+    直接用列表结果判「refs 是否为空」，会对**每一个** ruleset 都误报「形同虚设」
+    （这条假阳性在本工具首次实战时就把一个**已修好**的 ruleset 又报了一遍）。
+    ⇒ 必须逐个取详情 `GET /rulesets/{id}`；取不到时 `include` 记 None（**不判定**，宁可不报也不误报）。
+    """
+    ok, out = gh("api", f"repos/{repo}/rulesets", "--jq",
+                 '.[] | (.id | tostring) + " | " + .name + " | " + .target + " | " + .enforcement')
     if not ok:
         print(f"[FAIL] 查询 rulesets 失败: {out}")
         sys.exit(1)
-    return [ln for ln in out.splitlines() if ln.strip()]
+    rows = []
+    for ln in out.splitlines():
+        if not ln.strip():
+            continue
+        parts = [p.strip() for p in ln.split("|", 3)]
+        if len(parts) < 4:
+            continue
+        rid, name, target, enforcement = parts
+        include = None
+        ok2, det = gh("api", f"repos/{repo}/rulesets/{rid}")
+        if ok2:
+            try:
+                d = json.loads(det)
+                include = ((d.get("conditions") or {}).get("ref_name") or {}).get("include") or []
+            except json.JSONDecodeError:
+                include = None
+        rows.append((rid, name, target, enforcement, include))
+    return rows
 
 
 def main():
@@ -180,11 +201,15 @@ def main():
         if not items:
             print("  当前无 rulesets")
         else:
-            for it in items:
-                line = it
-                if re.search(r"refs=\s*\|", it + " "):
-                    line += "   ⚠️ refs 为空 ⇒ 形同虚设（不匹配任何 ref，删 tag 不被拦）"
-                print(f"  - {line}")
+            for rid, name, target, enforcement, include in items:
+                if include is None:
+                    refs_txt, flag = "conditions 未取到，未判定", ""
+                elif include:
+                    refs_txt, flag = "、".join(include), ""
+                else:
+                    refs_txt = "（空）"
+                    flag = "   ⚠️ refs 为空 ⇒ 形同虚设（不匹配任何 ref，删 tag 不被拦）"
+                print(f"  - {name} | {target} | {enforcement} | refs={refs_txt} | id={rid}{flag}")
         sys.exit(0)
 
     rules = [r.strip() for r in args.rules.split(",") if r.strip()]

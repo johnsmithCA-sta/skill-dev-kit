@@ -4,7 +4,7 @@ slug: skill-dev-kit
 displayName: 技能固化与发布工具包
 summary: 把可复用工作流固化为 Skill 并安全发布的全周期工具包：内置 16 项发布前检查清单（含归属与权益门禁，按改动类型分级裁剪）+ 8 个零依赖脚本（发布预检 preflight_release / 依赖自检 check_deps / 打包归档 make_skillhub_zip / GitHub tag 保护 setup_gh_ruleset / 触发词评估 eval_trigger / 评测循环 eval_loop / 批量体检 batch_skill_audit / 推送兜底 gh_push_files），并沉淀对外写作检查（检查面覆盖随包对外 markdown，含 references）、三视角语义通读、五层测试闭环、两轮脱敏审查、双平台发布流程与踩坑表，让后续同类技能跳过重复探索。
 description: 技能固化与发布工具包。当用户要"把工作流固化为技能、固化为 Skill、沉淀为技能、沉淀为 Skill、做成技能、做成 Skill、起草 SKILL.md、完善技能、写技能脚手架、做发布前检查 / 发布预检 / 脱敏预检 / 安全自查 / 发布检查清单、打包 SkillHub zip、创建 GitHub tag 保护 ruleset、走双平台（SkillHub/GitHub）发布流程、沉淀技能方法论与固化经验、做市场调研 / 竞品调研 / 市场空白定位、做技术选型（该不该做成技能）、做可靠性设计与错误处理、做 Token 降本 / 成本优化 / 怎么省 token、排查技能调试（没触发 / 不生效）、做评测技能或跑 benchmark、做技能复盘或写复盘模板"时使用。覆盖固化判定、技能目录三件套、SKILL.md 五要素、五层测试闭环（含基线双跑对照）、两轮脱敏审查、发布前 16 项检查清单（含 author/Copyright 归属门禁，按改动类型分级裁剪）、8 脚本自动化（含依赖自检与推送兜底）、触发词评估与评测循环、双平台发布、复盘与自动化反哺。内置脚本零第三方依赖（仅 Python 标准库 + 可选 gh/skillhub CLI），可直接接入 CI 门禁。不适用 / 不用于：技能内部业务逻辑的实现与运行期排障（属发布链路之外的事）、与技能开发无关的一次性脚本、已有成熟流水线且只想跳过检查直接发布的情形。
-version: 1.18.0
+version: 1.18.1
 last_updated: 2026-10-01
 license: MIT
 author: johnsmithCA-sta
