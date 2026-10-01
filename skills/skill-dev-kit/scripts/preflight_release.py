@@ -118,9 +118,12 @@ EXTRA_WAIVABLE = {
     # §9.9 打包卫生 —— warning。打包脚本排除名单只含 .pyc/.pyo 与 __pycache__，
     # 而 .bak/.tmp/~$*/.swp **不在名单里** ⇒ 这类文件真会被打进 SkillHub 包（真缺口）。
     "pack_hygiene": "打包卫生：临时/备份文件（.bak/.tmp/~$*/.swp）会被打进 SkillHub 包",
-    # §9.11 面向用户端写作（编写规范 §4.1）—— 对外入口不得含开发过程信息。
-    # 词表按「新规则先跑存量样本、误报率 <10%」校准（2026-09-19，26 个本地技能的 SKILL.md + README.md）。
-    "dev_process": "面向用户端写作(§4.1)：SKILL.md / README 含开发过程信息（版本治理章、实测日期与过程数据、治理口吻、维护者指令、商业意图）",
+    # §9.11 面向用户端写作（编写规范 §4.1）—— 检查面 = 随包对外 markdown（详见 dev_process_check）。
+    # ⚠️ 本描述**只列词表能静态匹配的类别**：§4.1 禁写表共 12 类，其中 7 类（维护者指令 /
+    #    商业意图 / 受众说明 / 单一平台品牌绑定 / 变更来源与内部动因 / 内部踩坑表 / 发布状态自曝）
+    #    **没有正则实现**，靠 §八 步骤 4.5 三视角通读与人工核对。描述里点名它们 = 承诺了没做的检查
+    #    （2026-10-01 验收 F2：旧描述恰好点名了其中实现得最差的两类）。
+    "dev_process": "面向用户端写作(§4.1)：随包对外文本含开发过程信息（可静态匹配 5 类：版本归属标注 / 实测日期与过程 / 过程叙述 / 治理口吻 / 过程数字；版本档案另加「写作规则自曝」。§4.1 其余 7 类无正则实现，靠步骤 4.5 三视角通读）",
     # 转手发布语义风险（2026-09-30 补齐三缺口，一律 warning，不判 critical）：
     "external_ref": "外部不可达引用：正文《书名号》引用指向内部知识库/私有文档（对外不可达）",
     "naming_exposure": "命名曝光：references/ 点名第三方产品并评分/贬损（转手发布时对外可见）",
@@ -131,6 +134,19 @@ WAIVABLE_KEYS = {k for k, (lv, _) in RULE_INDEX.items() if lv == "warning"} | se
 # --waive 输出/审计用的项说明
 WAIVER_DESC = {k: desc for k, (_, desc) in RULE_INDEX.items()}
 WAIVER_DESC.update(EXTRA_WAIVABLE)
+
+
+def waiver_desc(k):
+    """豁免项说明。逐文件豁免（`dev_process@references/<文件>.md`）回落到所属项的说明。
+
+    单独一个函数是为了「新形态忘了补说明」不至于 KeyError——门禁自己崩掉比漏报更难查。
+    """
+    if k in WAIVER_DESC:
+        return WAIVER_DESC[k]
+    base, sep, sub = k.partition("@")
+    if sep and base in WAIVER_DESC:
+        return f"{WAIVER_DESC[base]}（逐文件豁免：{sub}）"
+    return ""
 
 # ⚠️ 刻意不用（死代码，勿"修复"）：按扩展名白名单过滤会造成敏感扫描盲区
 #    （.env / Dockerfile / 无扩展名配置文件都不在表里）。扫描走 scan_text 的内容探测。
@@ -404,11 +420,16 @@ def _collapse_hits(items):
     return out
 
 
-def write_waiver(root, waived, reason, suppressed, fm):
+def write_waiver(root, waived, reasons, suppressed, fm, source=""):
     """豁免落盘留痕 → <目标目录>/.preflight-waiver.json。
 
     记 项/理由/时间/操作者/版本号 五要素。写失败只告警不阻断: 审计文件写不出来的
     常见原因是目录只读, 那不该让"能过"的检查因为这个变成"过不了"。
+
+    ⚠️ 每项**必须**带 `suppressed_hits` 真实处数（2026-10-01 验收 N2）：此前只有敏感扫描与
+    dev_process 逐文件计数，其余 12 个 key 恒 0 ⇒ 审计者会把「放行 13 处」读成「放行 0 处」，
+    **比没有这个字段更糟**。计数为 0 时额外给 `waiver_state`，把「干净」与「豁免没生效」区分开
+    （F6：0 有三义——问题已修完 / 该项压根没命中 / 检查没跑到）。
     """
     record = {
         "tool": "preflight_release.py",
@@ -419,13 +440,16 @@ def write_waiver(root, waived, reason, suppressed, fm):
         "waivers": [
             {
                 "item": k,
-                "desc": WAIVER_DESC.get(k, ""),
-                "reason": reason,
+                "desc": waiver_desc(k),
+                "reason": reasons.get(k, ""),
                 "suppressed_hits": suppressed.get(k, 0),
+                "waiver_state": ("生效" if suppressed.get(k, 0) else "休眠（本次零命中：未生效或问题已修完）"),
             }
             for k in sorted(waived)
         ],
     }
+    if source:
+        record["waive_source"] = source
     path = os.path.join(root, WAIVER_FILE)
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -574,11 +598,16 @@ SEC_REF_RE = re.compile(r"§\s*([0-9]+(?:\.[0-9]+)?|[一二三四五六七八九
 
 
 def _section_index(path):
-    """该文件可被引用的章节号集合，形如 {'1','1.1','4.1','五'}。"""
+    """该文件可被引用的章节号集合，形如 {'1','1.1','4.1','五'}。
+
+    ⚠️ 必须同时捕 `UnicodeDecodeError`：`references/` 下混进一个非 UTF-8 的 `.md`，
+    整个门禁会以 traceback 中断（§9 全部检查项都跑不到，也没有可执行的修复指引）。
+    2026-10-01 验收 F4 实测复现；rc 恰好非零所以不会误放行，但**崩掉的门禁和没跑的门禁一样没有用**。
+    """
     try:
         with open(path, encoding="utf-8") as f:
             text = f.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return set()
     idx = set()
     for m in HEADING_NUM_RE.finditer(text):
@@ -614,9 +643,11 @@ def ref_check(root):
     files = []
     if os.path.isfile(os.path.join(root, "SKILL.md")):
         files.append(os.path.join(root, "SKILL.md"))
+    # ⚠️ 递归（与 ref_doc_targets 同口径：含子目录与点目录、后缀不区分大小写）。
+    #    2026-10-01 验收 F8：原先只 listdir 一层，子目录里的文档「在本检查里不存在」，
+    #    而同一个文件在 dev_process 里是查的 —— 同一个包内两套范围。
     if os.path.isdir(ref_dir):
-        files += [os.path.join(ref_dir, f) for f in sorted(os.listdir(ref_dir))
-                  if f.endswith(".md")]
+        files += [os.path.join(root, rel) for rel in ref_doc_targets(root)]
     known = {os.path.basename(p) for p in files}
     index = {os.path.basename(p): _section_index(p) for p in files}
 
@@ -625,7 +656,7 @@ def ref_check(root):
         try:
             with open(path, encoding="utf-8") as f:
                 lines = f.read().splitlines()
-        except OSError:
+        except (OSError, UnicodeDecodeError):    # 同上：非 UTF-8 的 .md 不许把门禁打崩（F4）
             continue
         rel = os.path.relpath(path, root)
         for line in lines:
@@ -877,14 +908,17 @@ def orphan_ref_check(root):
 
 
 def ref_meta_check(root):
-    """references/*.md 是否带渐进披露元数据（加载条件 / 命中标签）。返回 (缺, 总)。"""
+    """references/**/*.md 是否带渐进披露元数据（加载条件 / 命中标签）。返回 (缺, 总)。
+
+    递归口径与 `ref_doc_targets` 一致（F8）：子目录里的参考文档同样是按需加载的资产。
+    """
     d = os.path.join(root, "references")
     if not os.path.isdir(d):
         return 0, 0
-    mds = sorted(f for f in os.listdir(d) if f.endswith(".md"))
+    mds = ref_doc_targets(root)
     lack = 0
-    for fn in mds:
-        text = (scan_text(os.path.join(d, fn)) or "").lstrip()
+    for rel in mds:
+        text = (scan_text(os.path.join(root, rel)) or "").lstrip()
         m = re.match(r"^---\s*\n(.*?)\n---", text, re.S)
         if not m or not all(k in m.group(1) for k in REF_META_KEYS):
             lack += 1
@@ -1024,17 +1058,28 @@ def _is_table_sep(line):
     return "-" in s and "|" in s
 
 
-# §9.11 面向用户端写作（编写规范 §4.1）：对外入口（SKILL.md / README.md）不得含开发过程信息。
+# §9.11 面向用户端写作（编写规范 §4.1）：随包对外发布的**全部文本**不得含开发过程信息。
 # 词表按「新规则先跑存量样本、误报率 <10%」校准（2026-09-19，26 个本地技能的 SKILL.md + README.md）：
 #   保留项全部真命中——「实测日期与过程」24 处、「治理口吻」2 处、「过程叙述」1 处；
-#   初版的 4 条规则在存量上**全部是误报**，已按要求收窄或删除：
-#     · 版本号泛匹 `v\d+\.\d+\.\d+` → 命中 git 命令示例 / 外部文档版本 / 业务版本号 ⇒ 收窄为归属标注形态；
-#     · `面向.{0,10}用户` → 命中规范正文自身 ⇒ 收窄为「目标受众 / 受众说明 / 本技能面向」；
-#     · `重跑一次` → 命中用户侧操作说明 ⇒ 收窄为「改动本技能 / 发布本技能前 / 发布前先清」；
-#     · `付费技能|商业化` → 命中支付类技能的**领域词**与规范正文 ⇒ 收窄为「商业化定位（」等标注形态。
-# 检查面：对外入口（SKILL.md / README.md）+ 版本档案（Changelog / 版本说明）——前者是使用者
-#   第一眼看到的，后者是发版时对外展示的，二者都在「用户可见」范围内。
-#   其余 references/（rubric、gates、脚本说明等）属执行轨，不受本检查约束。
+#   初版的 4 条规则在存量上**全部是误报**，处置是**删除或收窄**（2026-10-01 验收 N4 更正：
+#   旧注释把三条写成"收窄为 X"，而 X 这些形态在代码里根本不存在——实际是**删除**；
+#   只有版本号那条真被收窄成了「归属标注」）：
+#     · 版本号泛匹 `v\d+\.\d+\.\d+` → 命中 git 命令示例 / 外部文档版本 / 业务版本号 ⇒ **收窄**为归属标注形态；
+#     · `面向.{0,10}用户`（受众说明） ⇒ **删除**；
+#     · `重跑一次`（维护者指令） ⇒ **删除**；
+#     · `付费技能|商业化`（商业意图） ⇒ **删除**（现仅能由「商业化定位（vX.Y.Z）」夹带的版本括号偶然命中）。
+#   ⇒ 被删掉的正是「维护者指令 / 商业意图 / 受众说明」三类，这也解释了 F2：描述曾仍在承诺它们。
+#
+# 检查面（2026-10-01 扩面）：范围 = **随包对外发布的全部文本**，不按目录路径豁免 ——
+#   SKILL.md / README（对外入口）+ 版本档案（Changelog / 版本说明）+ **references/**/*.md**。
+#   ⚠️ 此前 references/ 被当作「执行轨」整目录静默豁免，而它随包发布、用户排障时就会读到 ——
+#     2026-10-01 实证：一次发版把内部坐标与开发口径留在 references/，闸门结构性放行。范围错 ⇒
+#     检查项永远看不见那些文件；更糟的是审计需求单里的红线也照同一错误范围写 ⇒ 盲区在传递中被加固。
+#   判据是「读者是谁」，不是「文件在哪个目录」；静态脚本可执行的等价物 = 「这份包是否对外发布」
+#   （`--scope local` = 自用不发布 ⇒ references 命中只登记不判定，见 dev_process 出口）。
+#   ⚠️ 误报侧已知：本包自身的《SKILL.md编写规范》《反模式清单》《Changelog写作模板》这类**主题即规则**
+#     的文档，正文必须引用被禁词本身 ⇒ 逐文件显式豁免（`--waive dev_process@references/<文件名>`），
+#     豁免带理由落盘留痕。默认口径永远是不豁免：豁免得留痕，不是静默放行。
 DEV_PROCESS_RULES = [
     ("版本归属标注",
      re.compile(r"[（(]\s*v\d+\.\d+\.\d+\s*[）)]|自\s*v\d+\.\d+\.\d+\s*起"
@@ -1070,77 +1115,186 @@ CHANGELOG_ONLY_RULES = [
 ]
 
 DEV_PROCESS_FILES = ("SKILL.md", "README.md")
+# references/ 的对外文本（递归取 .md）。⚠️ 不设文件名白名单豁免 —— 白名单会让「名字没预料到」
+# 的文件被静默放行，这正是本次事故的形态（按目录整片豁免）。真需要豁免走 --waive 逐文件声明。
 
 
 CHANGELOG_NAME_KEYS = ("changelog", "版本说明", "版本历史", "版本发布", "更新日志")
 
+# 排除：「写 changelog 的方法论 / 模板 / 规范」类文档 —— 它的主题就是 changelog，
+# 正文必然出现判据词与反例，把它当版本档案扫等于自己打自己（2026-09-30 实测：本技能
+# 《Changelog写作模板.md》被误判成版本档案、5 处命中全为误报）。
+CHANGELOG_NAME_EXCLUDE = ("模板", "规范", "指南", "写作", "示例", "说明文档")
+
+# 递归遍历包内文件时的跳过目录 —— **必须与 `make_skillhub_zip.SKIP_DIRS` 逐项一致**。
+# 为什么强制一致（2026-10-01 验收 F7）：只要打包器装、检查器不查，就会出现「会随包发布
+# 但永不检查」的路径。此前 `ref_doc_targets` 剪掉所有 `.` 开头目录，而打包器只跳过 `.git`
+# ⇒ `references/.隐藏目录/*.md` 正好落在这个缝里。改本表**必须同步改打包器**，反之亦然。
+WALK_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build", "output"}
+
 
 def changelog_targets(root):
-    """发现对外可见的版本档案（根目录与 references/ 下的 Changelog / 版本说明）。
+    """发现对外可见的版本档案（包内**任意深度**的 Changelog / 版本说明）。
 
     为什么补扫（2026-09-30 实证）：某技能对外包把整篇开发口径的变更史与数十处具名记录留在
     references/ 里，而本检查当时只覆盖 SKILL.md / README.md ⇒ 结构性放行、必然 PASS。
     版本档案是发版时对外展示的文本，与对外入口同属「用户可见」范围。
 
-    ⚠️ 名称匹配只认「版本说明 / 版本历史 / 版本发布 / 更新日志 / changelog」这几种**版本档案**
-    形态；「版本治理 / 版本台账」这类方法论文档与内部台账属执行轨，不在此列——2026-09-30
-    校准实测：用「文件名含『版本』」宽匹配会把 skill-dev-kit 自己的方法论文档误判成版本档案。
+    ⚠️ 名称匹配的三次收窄（都来自实测误报）：
+      ① 初版用「文件名含『版本』」→ 把《知识分层与版本治理.md》误判成版本档案；
+      ② 收紧为「changelog / 版本说明 / 版本历史 / 版本发布 / 更新日志」后，
+         《Changelog写作模板.md》仍被误判（主题即 changelog，正文全是对错与反例）；
+      ③ 故再排除「模板 / 规范 / 指南 / 写作 / 示例」这类**方法论**文件名。
+
+    ⚠️ 2026-10-01 起改为**递归**（验收 F8）：原实现只扫包根与 `references/` 一层，于是
+    `references/<子目录>/Changelog*.md` 既不带 changelog 专属规则、frontmatter 也被跳过，
+    而同名同胞放一层就命中 —— 而「版本档案的 summary 会随市场展示」这个理由**与深度无关**；
+    `ref_doc_targets` 早已递归，同一个文件在两处口径不同。跳过目录与打包器对齐。
     """
     out = []
-    for sub in ("", "references"):
-        d = os.path.join(root, sub) if sub else root
-        if not os.path.isdir(d):
-            continue
-        for fn in sorted(os.listdir(d)):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in WALK_SKIP_DIRS)
+        for fn in sorted(filenames):
             if not fn.endswith(".md"):
                 continue
             low = fn.lower()
-            if any(k in low for k in CHANGELOG_NAME_KEYS):
-                out.append(os.path.relpath(os.path.join(d, fn), root))
-    return out
+            if not any(k in low for k in CHANGELOG_NAME_KEYS):
+                continue
+            if any(x in fn for x in CHANGELOG_NAME_EXCLUDE):
+                continue
+            out.append(os.path.relpath(os.path.join(dirpath, fn), root))
+    return sorted(out)
 
 # DEV_PROCESS_CANDIDATES —— 候选池（人工审查新发现的形态，待下轮按误报率<10%校准后入正式规则）：
 #   · 「点名/贬损评分卡」：references/ 里对第三方产品打分定性（如「65 分 B 级」「评分卡」），
-#     转手发布时对外可见。该形态已由 naming_exposure_check 覆盖（S-5 收窄 references 豁免），
-#     未来可评估并入 dev_process（当前 references/ 仍受「对外入口」豁免，暂不并入）。
+#     转手发布时对外可见。该形态已由 naming_exposure_check 覆盖，暂不并入 dev_process 词表
+#     （它的可静态匹配形态太窄，并入只会拉高误报；dev_process 已覆盖 references 的措辞类风险）。
 #   ⚠️ 候选池不入 DEV_PROCESS_RULES：未经误报率校准就上规则，会让门禁学会被无视。
 
 
-def dev_process_check(root):
-    """对外可见文档是否含开发过程信息。返回 [(文件, 行号, 类别, 片段)]。
+def ref_doc_targets(root):
+    """references/ 下全部 markdown 文档的相对路径（递归，路径排序）。目录不存在返回空表。
 
-    对外入口（SKILL.md / README.md）跳过 frontmatter；版本档案**不跳过**——
-    其 summary 会随市场展示对外可见，同样算「用户可见」文本。
+    ⚠️ 后缀**大小写不敏感**、**不剪点目录**（2026-10-01 验收 F7）：打包器只跳过
+    `WALK_SKIP_DIRS`，所以 `references/.隐藏目录/x.md` 会真的随包发布 ⇒ 检查面必须跟上，
+    否则「范围 = 随包对外发布的全部文本」这句话在实现里没有兑现。跳过表与打包器共用同一常量。
+    """
+    d = os.path.join(root, "references")
+    out = []
+    if not os.path.isdir(d):
+        return out
+    for dirpath, dirnames, filenames in os.walk(d):
+        dirnames[:] = sorted(x for x in dirnames if x not in WALK_SKIP_DIRS)
+        for fn in filenames:
+            if fn.lower().endswith(".md"):
+                out.append(os.path.relpath(os.path.join(dirpath, fn), root))
+    return sorted(out)
+
+
+def dev_process_check(root):
+    """随包对外文本是否含开发过程信息。返回 (hits, stats)。
+
+    hits  = [(文件, 行号, 类别, 片段)]
+    stats = {"targets": [目标相对路径], "read": [实际读到的], "unread": [(路径, 原因)],
+             "archives": [版本档案相对路径], "fm_skipped_lines": N}
+
+    为什么要回传 stats：范围不可见时，范围错了没人发现——references 被整目录豁免的那一次，
+    报告只写「✓ 面向用户端写作（对外入口无开发过程信息）」，读者无从知道压根没查 references。
+    2026-10-01 验收又补一刀：**「目标份数」≠「实查份数」**（不存在的文件、读不出的文件
+    都曾被算作「已检查」）⇒ 两个数都要报，差值即「没查到的」（F3）。
+
+    检查面 = 对外入口（SKILL.md / README.md）+ 版本档案（包内任意深度）+ `references/**` 的
+    markdown（含子目录与点目录，后缀不区分大小写）+ 包根其余 `.md`。
+    **只对 markdown 文档负责**：非 `.md` 资产与 `evals/**`（评测夹具，非对外文档）不在面内 ——
+    它们同样会随包发布，这是**明示的不承诺**，不是遗漏（口径见 §4.1「范围与豁免」）。
+
+    frontmatter：对外入口跳过（路由元数据）；references 跳过（渐进披露元数据，消费者是本地
+    agent 路由——`ref_meta_check` 的缺失文案就是「索引无法按条件路由」，平台字段只从 SKILL.md
+    读，见《知识产权边界与护城河判定》§六 双轨制）；版本档案**不跳过**——它的 summary 会随
+    市场页展示，属用户轨（这是 2026-10-01 验收 F9 的裁定：跳过与不跳过在同一判据下并存不悖）。
     """
     hits = []
-    cl = set(changelog_targets(root))
-    targets = [(n, True) for n in DEV_PROCESS_FILES]          # 对外入口：跳过 frontmatter
-    targets += [(n, False) for n in sorted(cl)]               # 版本档案：frontmatter 也查
+    cl = changelog_targets(root)
+    cl_set = set(cl)
+    # 对外入口只收**存在**的文件：README.md 本就不该存在（规范要求包内无 README），
+    # 把不存在的路径算进「目标」会让每次报告都多一行「未读到 README.md（文件不存在）」噪音，
+    # 而真正的读不出（编码/权限）会被淹没在里面。**读不出的信号必须干净**。
+    targets = [(n, True) for n in DEV_PROCESS_FILES if os.path.isfile(os.path.join(root, n))]
+    targets += [(n, False) for n in cl]                       # 版本档案：frontmatter 也查
+    seen = {n for n, _ in targets}
+    for rel in ref_doc_targets(root):                         # references/**：跳过 frontmatter
+        if rel not in seen:
+            targets.append((rel, True))
+            seen.add(rel)
+    for fn in (sorted(os.listdir(root)) if os.path.isdir(root) else []):
+        # 包根其余 .md（NOTES.md 一类）：会随包发布且用户能看到，不是「入口」但同属对外文本
+        if fn.lower().endswith(".md") and fn not in seen:
+            targets.append((fn, True))
+            seen.add(fn)
+    stats = {"targets": [n for n, _ in targets], "read": [], "unread": [],
+             "archives": cl, "fm_skipped_lines": 0}
     for name, skip_fm in targets:
         path = os.path.join(root, name)
         if not os.path.isfile(path):
+            stats["unread"].append((name, "文件不存在"))
             continue
         try:
             with open(path, encoding="utf-8") as f:
                 lines = f.read().splitlines()
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as e:
+            # 读不出必须**可见**：静默跳过 + 仍计入「已检查」= 这个文件像被查过（F3/F4）
+            stats["unread"].append((name, type(e).__name__))
             continue
-        rules = DEV_PROCESS_RULES + (CHANGELOG_ONLY_RULES if name in cl else [])
+        stats["read"].append(name)
+        rules = DEV_PROCESS_RULES + (CHANGELOG_ONLY_RULES if name in cl_set else [])
         in_fm = False            # 正在 frontmatter 内
         fm_done = not skip_fm    # frontmatter 已结束（只认文件开头那一段）
         for i, line in enumerate(lines, 1):
-            if skip_fm and not fm_done and line.strip() == "---":
-                in_fm = not in_fm
-                if not in_fm:
+            s = line.strip()
+            if skip_fm and not fm_done:
+                # ⚠️ 只有**首个非空行**才是 frontmatter 起点。任意位置的水平线 `---` 一旦
+                #    翻转状态，其后整篇就不再扫（2026-10-01 验收 N1：2 份文件 9 行真命中被吞，
+                #    而报告照样说「已覆盖 references/**」）。
+                if i == 1:
+                    if s == "---":
+                        in_fm = True
+                        stats["fm_skipped_lines"] += 1
+                        continue
                     fm_done = True
-                continue
+                elif in_fm:
+                    if s == "---":
+                        in_fm = False
+                        fm_done = True
+                    stats["fm_skipped_lines"] += 1
+                    continue
+                else:
+                    fm_done = True
             if in_fm:
                 continue
             for label, rx, _hint in rules:
                 if rx.search(line):
-                    hits.append((name, i, label, line.strip()[:80]))
+                    hits.append((name, i, label, s[:80]))
                     break
-    return hits
+    return hits, stats
+
+
+def is_ref_doc(rel):
+    """该相对路径是否属 references/ 下（纯路径前缀，**不含「是不是版本档案」**）。
+
+    ⚠️ 「桶计数」与「命中分档」曾共用这一个函数 —— 版本档案因此被误归进 references 桶，
+    与「版本档案恒判」的注释承诺相反（2026-10-01 验收 F1）。**版本档案请用 is_version_archive()**。
+    """
+    return rel.replace(os.sep, "/").startswith("references/")
+
+
+def is_version_archive(rel, archives):
+    """该相对路径是否是对外展示的版本档案。
+
+    为什么单列：版本档案常年躺在 `references/` 下，但它是**发版时对外展示**的文本
+    （summary 随市场页展示），与 SKILL.md / README 同属「第一读者面」⇒ 不受 `--scope local` 放宽，
+    且**不接受逐文件豁免**（要改的是文本本身，不是把它划出去）。
+    """
+    return rel.replace(os.sep, "/") in set(archives)
 
 
 def route_donotuse_check(root):
@@ -1218,9 +1372,9 @@ def external_ref_check(root):
     return hits
 
 
-# ---------------------------------------------------------------- 命名曝光（S-5 references 豁免收窄）
-# dev_process_check 只查对外入口 SKILL.md / README.md，references/ 完全豁免；但转手发布场景下
-# references/ 里「点名第三方产品 + 贬损/评分」内容同样对外可见。产品名是开放集合不可穷举，
+# ---------------------------------------------------------------- 命名曝光（references 的语义风险）
+# dev_process_check 自 2026-10-01 起已覆盖 references/ 的**措辞类**风险（日期/版本归属/治理口吻），
+# 本检查补的是它抓不到的**点名/贬损**（产品名是开放集合，无稳定词法形态）——两者互补、不重复。
 # 故用「评分/贬损」的可静态匹配形态做锚点（反模式 #N3：语义形态做启发式、低误报优先）。
 # 「竞品/点名」单独出现不做锚点（市场调研模板里全是「竞品」，独立触发会大量误报）。
 # ⚠️ 2026-09-30 DSH 全库标定：「评分卡」是中性高频词（评分表/输出格式语境），误报 3/3=100% ⇒ 已删，
@@ -1358,12 +1512,21 @@ def main():
     ap.add_argument("target", help="待检查的目录")
     ap.add_argument("--platform", choices=["skillhub", "github"], default="skillhub",
                     help="目标平台档（默认 skillhub）——决定必填字段与必含文件清单")
+    ap.add_argument("--scope", choices=["release", "local"], default="release",
+                    help="检查面（默认 release）：release = 这份包会对外发布 ⇒ references/ 深层面的"
+                         "对外写作命中进判定；local = 自用不发布 ⇒ 只登记。"
+                         "第一读者面（入口/版本档案）不受本开关影响，恒判")
     ap.add_argument("--strict", action="store_true", help="低危告警也视为失败")
     ap.add_argument("--quiet", action="store_true",
-                    help="只输出结果行（便于 CI）；FAIL 的修复指引照常打印")
+                    help="只输出结果行（便于 CI）——正文体积读数与告警计数会折进结果行，"
+                         "避免「看不见读数」被读成达标")
     ap.add_argument("--waive", action="append", default=[], metavar="项",
                     help="豁免指定 warning 项(可多次传入, 必须同时给 --reason)。"
-                         f"可豁免: {', '.join(sorted(WAIVABLE_KEYS))}")
+                         f"可豁免: {', '.join(sorted(WAIVABLE_KEYS))}；"
+                         "references 深层面可逐文件豁免: dev_process@references/<文件名>.md")
+    ap.add_argument("--waive-file", metavar="路径", default="",
+                    help="从已有的 .preflight-waiver.json 读入豁免项与理由（供 batch / CI 复用）——"
+                         "不带任何 --waive 的调用方（批量体检、看板）因此不会把已登记豁免的技能判红")
     ap.add_argument("--reason", metavar="文本",
                     help="豁免理由; --waive 时必填, 随豁免一起落盘 .preflight-waiver.json 留痕")
     ap.add_argument("--skip-ownership", action="store_true",
@@ -1377,22 +1540,63 @@ def main():
     if args.waive and not (args.reason or "").strip():
         ap.error("--waive 必须同时提供 --reason（无理由的豁免等于没有审计）")
     waived = set()
-    for k in args.waive:
-        k = (k or "").strip()
-        if k in CRITICAL_KEYS:
+    reasons = {}
+    reason = (args.reason or "").strip()
+
+    def _accept(k, why):
+        base, _, sub = k.partition("@")
+        if base in CRITICAL_KEYS:
             ap.error(f"「{k}」是 critical 级, 不可豁免 —— 真敏感必须修(删密钥+轮换), 不能靠豁免放行")
-        if k not in WAIVABLE_KEYS:
+        if base not in WAIVABLE_KEYS:
             ap.error(f"未知豁免项「{k}」。可豁免: {', '.join(sorted(WAIVABLE_KEYS))}")
+        if sub:
+            # 逐文件豁免（`dev_process@references/<文件名>`）：只有 dev_process 需要——深层面按文件
+            # 判定；第一读者面（入口/版本档案）要改的是文本本身，不给逐文件出口。
+            if base != "dev_process":
+                ap.error(f"「{k}」：{base} 不支持逐文件豁免（目前只有 dev_process 需要）")
+            if not sub.startswith("references/") or not sub.endswith(".md"):
+                ap.error(f"「{k}」：逐文件豁免须写成 dev_process@references/<文件名>.md")
         waived.add(k)
+        if why:
+            reasons[k] = why
+
+    for _k in args.waive:
+        _accept((_k or "").strip(), reason)
+
+    # --waive-file：从已落盘的留痕件读入豁免项与理由（供批量体检 / CI 复用）。
+    # 为什么需要（2026-10-01 验收 F5）：豁免只存在于命令行 ⇒ 任何不带 --waive 的调用方
+    # 都会把「已登记豁免」的技能判红，而面板上看不出红的原因。
+    waive_src = (args.waive_file or "").strip()
+    if waive_src:
+        try:
+            with open(waive_src, encoding="utf-8") as f:
+                _rec = json.load(f)
+        except (OSError, ValueError) as e:
+            ap.error(f"--waive-file 读取失败: {waive_src} ({e})")
+        for _w in (_rec.get("waivers") or []):
+            _accept((_w.get("item") or "").strip(), (_w.get("reason") or "").strip())
+
     # --skip-ownership 等价于 --waive ownership, 但**不落盘**(旧用法行为不变),
     # 因此不进 waived 集合, 单独用 skip_own 控制。
     skip_own = args.skip_ownership or "ownership" in waived
-    reason = (args.reason or "").strip()
 
     root = os.path.abspath(args.target)
     if not os.path.isdir(root):
         print(f"[FAIL] 目录不存在: {root}")
         sys.exit(1)
+
+    # 逐文件豁免必须指向包内真实文件：路径打错 ⇒ 豁免命中 0 处却照样写进留痕，使用者会以为
+    # 「豁免了」其实什么都没豁免（同「无理由豁免 = 无审计」，静默失效的门禁比没有门禁更糟）。
+    # 且**版本档案不接受逐文件豁免**：它属第一读者面（恒判），给了豁免也压不住那里的命中 ——
+    # 与其静默空转，不如当场报错（响亮失败 > 静默无效）。
+    _cl_set = set(changelog_targets(root))
+    for k in sorted(waived):
+        base, _, sub = k.partition("@")
+        if base == "dev_process" and sub and not os.path.isfile(os.path.join(root, sub)):
+            ap.error(f"--waive {k}：包内不存在 {sub}（逐文件豁免必须指向真实路径）")
+        if base == "dev_process" and sub and sub in _cl_set:
+            ap.error(f"--waive {k}：版本档案属第一读者面，不接受逐文件豁免 —— "
+                     "版本说明要按 §4.1 直接改文本（它的 summary 随市场页展示）")
 
     # fails 元素为 (问题, 修复指引) —— 只说"缺什么"不说"怎么修"违反纪律 4（本守门员自己先守住）
     fails, warns = [], []
@@ -1421,7 +1625,8 @@ def main():
         log(f"  - 已跳过 {skipped_lockfiles} 个第三方锁定/压缩文件（package-lock 等，非资产，默认排除）")
     for k in sorted(waived):
         if k in suppressed:
-            log(f"  - 已豁免: {k}（{WAIVER_DESC[k]}, {suppressed[k]} 处）— 理由: {reason}")
+            log(f"  - 已豁免: {k}（{waiver_desc(k)}, {suppressed[k]} 处）"
+                f"— 理由: {reasons.get(k, reason)}")
     if not critical and not warning:
         log("  ✓ 未发现敏感信息")
     for item in critical:
@@ -1437,6 +1642,7 @@ def main():
             warns.append(item)
 
     # 2. frontmatter 校验
+    body_est = None          # 正文体积读数：供 --quiet 结果行复用（F14）
     log(f"── 2. frontmatter 校验 (platform={args.platform}) ──")
     if fm is None:
         log("  ✗ 未找到 SKILL.md 或缺少 frontmatter (--- 块)")
@@ -1481,6 +1687,7 @@ def main():
 
             # L2 正文体积（规范建议项；目标 ~2000 / 硬上限 5000；口径见 body_token_estimate）
             est = body_token_estimate(os.path.join(fm_dir, "SKILL.md"))
+            body_est = est
             if est is None:
                 log("  - SKILL.md 正文体积: 读取失败, 跳过")
             elif est > BODY_TOKEN_LIMIT:
@@ -1534,7 +1741,8 @@ def main():
         for u in untracked:
             log(f"  ⚠ 未跟踪: {u}")
         if "untracked" in waived:
-            log(f"  - 已豁免: untracked（{len(untracked)} 个）— 理由: {reason}")
+            suppressed["untracked"] = suppressed.get("untracked", 0) + len(untracked)
+            log(f"  - 已豁免: untracked（{len(untracked)} 个）— 理由: {reasons.get('untracked', reason)}")
         elif args.strict:
             fails.append((f"git 未跟踪文件: {untracked}",
                           "git add <要发布的文件>, 或写进 .gitignore 排除临时产物"))
@@ -1545,7 +1753,8 @@ def main():
     log("── 5. 归属检查 ──")
     if skip_own:
         if "ownership" in waived:
-            log(f"  - 已豁免: ownership（整组跳过）— 理由: {reason}")
+            suppressed["ownership"] = suppressed.get("ownership", 0) + 1   # 整组豁免：以「项」计
+            log(f"  - 已豁免: ownership（整组跳过）— 理由: {reasons.get('ownership', reason)}")
         else:
             # 文案保持与改造前逐字一致（向后兼容）; 迁移提示只放 --help 与文档
             log("  - --skip-ownership 指定, 跳过")
@@ -1553,8 +1762,10 @@ def main():
         own_critical, own_warning, own_info = ownership_check(root, fm)
         if "author" in waived:
             # 只摘 author 告警, LICENSE Copyright 行(critical)不受影响
+            n_auth = len([w for w in own_warning if "author" in w])
             own_warning = [w for w in own_warning if "author" not in w]
-            log(f"  - 已豁免: author — 理由: {reason}")
+            suppressed["author"] = suppressed.get("author", 0) + n_auth
+            log(f"  - 已豁免: author（{n_auth} 处）— 理由: {reasons.get('author', reason)}")
         for i in own_info:
             log(f"  ✓ {i}")
         for c in own_critical:
@@ -1579,7 +1790,8 @@ def main():
     log("── 6. § 章节引用校验 ──")
     broken, ref_total, unjudged = ref_check(root)
     if "dangling_ref" in waived:
-        log(f"  - 已豁免: dangling_ref（{len(broken)} 处断链）— 理由: {reason}")
+        suppressed["dangling_ref"] = suppressed.get("dangling_ref", 0) + len(broken)
+        log(f"  - 已豁免: dangling_ref（{len(broken)} 处断链）— 理由: {reasons.get('dangling_ref', reason)}")
     elif broken:
         for item in broken:
             msg = f"章节引用断链: {item}"
@@ -1600,7 +1812,9 @@ def main():
     log("── 7. 版本与 tag 一致性 ──")
     v_warn, v_ok, v_skip = version_tag_check(root, (fm or {}).get("version", ""))
     if "version_tag" in waived:
-        log(f"  - 已豁免: version_tag — 理由: {reason}")
+        n_ver = 1 if v_warn else 0
+        suppressed["version_tag"] = suppressed.get("version_tag", 0) + n_ver
+        log(f"  - 已豁免: version_tag（{n_ver} 处）— 理由: {reasons.get('version_tag', reason)}")
     elif v_warn:
         log(f"  ⚠ {v_warn}")
         if args.strict:
@@ -1617,7 +1831,9 @@ def main():
     log("── 8. 评测宣称—证据一致性 ──")
     e_warn, e_ok = eval_claim_check(root, fm_dir)
     if "eval_claim" in waived:
-        log(f"  - 已豁免: eval_claim — 理由: {reason}")
+        n_ev = 1 if e_warn else 0
+        suppressed["eval_claim"] = suppressed.get("eval_claim", 0) + n_ev
+        log(f"  - 已豁免: eval_claim（{n_ev} 处）— 理由: {reasons.get('eval_claim', reason)}")
     elif e_warn:
         log(f"  ⚠ {e_warn}")
         if args.strict:
@@ -1645,10 +1861,16 @@ def main():
         else:
             log(f"  - {msg}")
 
-    def _emit(key, msg, hint):
-        """warning 级出口：`--waive` 的 key 在此生效。"""
+    def _emit(key, msg, hint, n=1):
+        """warning 级出口：`--waive` 的 key 在此生效。
+
+        `n` = 该项本次被豁免掉的**命中处数**，写进留痕文件。2026-10-01 验收 N2：此前只有
+        敏感扫描与 dev_process 逐文件两项计数，其余 12 个 key 的 `suppressed_hits` 恒 0 ——
+        留痕件会把「放行 13 处」读成「放行 0 处」，**比没有这个字段更糟**。
+        """
         if key in waived:
-            log(f"  - 已豁免: {key} — 理由: {reason}")
+            log(f"  - 已豁免: {key}（{n} 处）— 理由: {reasons.get(key, reason)}")
+            suppressed[key] = suppressed.get(key, 0) + n
             return
         _sec("warn", msg, hint)
 
@@ -1665,7 +1887,9 @@ def main():
         _emit("desc_face",
               "description 触发面: " + "；".join(parts),
               "按 references/SKILL.md编写规范.md §二 五要素 #1 补「适用 / 不适用」与口语触发词示例；"
-              "明细跑 scripts/eval_trigger.py <技能目录> --desc-check")
+              "明细跑 scripts/eval_trigger.py <技能目录> --desc-check（正文口径）；"
+              "平台路由还须看 description，故加跑 --from-description",
+              n=len(d_fails) + len(d_warns))
     else:
         log("  ✓ description 触发面达标（无自称构式 / 有动作动词 / 有排他边界与触发词示例）")
 
@@ -1695,7 +1919,8 @@ def main():
     if rw:
         _emit("reserved_word",
               f"frontmatter 含保留词 claude/anthropic: {', '.join(rw)}",
-              "改掉这些字段值里的品牌保留词（正文提及官方文件名不受影响）")
+              "改掉这些字段值里的品牌保留词（正文提及官方文件名不受影响）",
+              n=len(rw))
     else:
         log("  ✓ 保留词（frontmatter 无 claude/anthropic）")
 
@@ -1743,7 +1968,8 @@ def main():
     if q_issues:
         _emit("quote_hygiene",
               "frontmatter 引号卫生: " + "；".join(q_issues),
-              "给值加引号（YAML 失败）或改用中文全角「：」；多行纯量改写成单行或整体加引号")
+              "给值加引号（YAML 失败）或改用中文全角「：」；多行纯量改写成单行或整体加引号",
+              n=len(q_issues))
     else:
         log("  ✓ frontmatter 引号卫生（无裸冒号 / 英文冒号 / 多行纯量）")
 
@@ -1754,7 +1980,8 @@ def main():
         _emit("pack_hygiene",
               f"打包卫生: {len(junk)} 个临时/备份文件会被打进 SkillHub 包（{shown}）",
               "删除后重新打包，或确认不需要随包；确需保留可 "
-              "--waive pack_hygiene --reason \"...\"")
+              "--waive pack_hygiene --reason \"...\"",
+              n=len(junk))
     else:
         log("  ✓ 打包卫生（无 .bak/.tmp/~$/.swp）")
 
@@ -1769,18 +1996,81 @@ def main():
     else:
         log("  ✓ 路由表 doNotUse（表头已含「不路由 / Do NOT route」）")
 
-    # 9.11 面向用户端写作（§4.1）：对外入口不得含开发过程信息（warning / 可豁免 dev_process）
-    dp_hits = dev_process_check(root)
-    if dp_hits:
-        shown = "；".join(f"{f}:{ln} {lb}" for f, ln, lb, _s in dp_hits[:3])
-        more = f" 等 {len(dp_hits)} 处" if len(dp_hits) > 3 else ""
+    # 9.11 面向用户端写作（§4.1）：随包对外 markdown 不得含开发过程信息。
+    #   分档（2026-10-01 定；验收 F1 修正过口径）：
+    #     **第一读者面**（对外入口 SKILL.md / README + 版本档案）**恒判** warning——前者是使用者
+    #       第一眼看到的，后者是发版时对外展示的（summary 上市场页），与这份包发不发布无关；
+    #     **references/ 深层面**按 `--scope` 分档：release（会对外发布）= 同档；local（自用）= 只登记。
+    #   ⚠️ 「桶计数」与「命中分档」必须用**两个判据**（is_ref_doc / is_version_archive）：
+    #      两者曾共用一个 is_ref_doc，版本档案被同时归进两个桶、注释还承诺「恒判」（F1）。
+    dp_hits, dp_stats = dev_process_check(root)
+    cl_set = set(dp_stats["archives"])
+    if "dev_process" in waived:
+        # N3（2026-10-01 验收）：全局 key 会把**第一读者面**的命中一起放行。逐文件语法并没有
+        # 封住这条路，所以不再声称"它就是为防这个而设计"，改成在报告里明说后果。
+        log("  - ⚠️ 全局豁免 dev_process：第一读者面（入口 / 版本档案）的命中已一并放行；"
+            "只想放行 references 深层面，请改用逐文件语法 dev_process@references/<文件>.md")
+
+    def _is_face(path):                      # 第一读者面：非 references 路径，或 references 下的版本档案
+        return (not is_ref_doc(path)) or (path in cl_set)
+
+    n_target, n_read = len(dp_stats["targets"]), len(dp_stats["read"])
+    n_face = sum(1 for p in dp_stats["targets"] if _is_face(p))
+    n_deep = n_target - n_face
+    face_rd = sum(1 for p in dp_stats["read"] if _is_face(p))
+    deep_rd = n_read - face_rd
+    log(f"  · 对外写作检查面: 目标 {n_target} 份 / 实查 {n_read} 份"
+        f"（第一读者面 {face_rd}/{n_face} ｜ references 深层面 {deep_rd}/{n_deep}）")
+    if dp_stats["unread"]:
+        shown = "；".join(f"{p}（{why}）" for p, why in dp_stats["unread"][:3])
+        more = f" 等 {len(dp_stats['unread'])} 份" if len(dp_stats["unread"]) > 3 else ""
+        log(f"  - ⚠️ 未读到 {len(dp_stats['unread'])} 份，**不计入实查**（不存在或非 UTF-8）: {shown}{more}")
+    if dp_stats["fm_skipped_lines"]:
+        log(f"  - frontmatter 段跳过 {dp_stats['fm_skipped_lines']} 行"
+            f"（入口/渐进披露元数据按约定不查；版本档案不跳）")
+
+    face_hits = [h for h in dp_hits if _is_face(h[0])]
+    deep_all = [h for h in dp_hits if not _is_face(h[0])]
+    waived_ref_files = {k.split("@", 1)[1] for k in waived if k.startswith("dev_process@")}
+    deep_hits = [h for h in deep_all if h[0] not in waived_ref_files]
+    for h in deep_all:                # 逐文件豁免掉的命中要计入留痕：豁免了多少处得看得出来
+        if h[0] in waived_ref_files:
+            wk = "dev_process@" + h[0]
+            suppressed[wk] = suppressed.get(wk, 0) + 1
+
+    if face_hits:
+        shown = "；".join(f"{f}:{ln} {lb}" for f, ln, lb, _s in face_hits[:3])
+        more = f" 等 {len(face_hits)} 处" if len(face_hits) > 3 else ""
         _emit("dev_process",
-              f"面向用户端写作: 对外入口含开发过程信息 {len(dp_hits)} 处（{shown}{more}）",
-              "按 references/SKILL.md编写规范.md §4.1 改写：删日期与过程数据、版本归属、治理口吻、"
-              "维护者指令、商业意图；案例与复盘移出发布包；确属能力背书可 "
-              "--waive dev_process --reason \"...\"")
+              f"面向用户端写作: 第一读者面（入口/版本档案）含开发过程信息 {len(face_hits)} 处"
+              f"（{shown}{more}）",
+              "按 references/SKILL.md编写规范.md §4.1 改写：删日期与过程数据、版本归属、治理口吻"
+              "（本词表只能静态匹配 5 类，其余 7 类靠 §八 步骤 4.5 三视角通读与人工核对）；"
+              "第一读者面**不接受逐文件豁免**——要改的是文本本身；"
+              "确需整组放行用 --waive dev_process --reason \"...\"（会连 references 深层面一起放行）",
+              n=len(face_hits))
     else:
-        log("  ✓ 面向用户端写作（对外入口无开发过程信息）")
+        log(f"  ✓ 面向用户端写作（第一读者面 {face_rd} 份无开发过程信息）")
+
+    for f in sorted(waived_ref_files):
+        n = suppressed.get("dev_process@" + f, 0)
+        tail = f"豁免 {n} 处" if n else "**本次 0 处命中**（休眠豁免：未生效或问题已修完，请复核后删掉）"
+        log(f"  - 已豁免: dev_process@{f}（逐文件豁免，{tail}）")
+
+    if deep_hits:
+        shown = "；".join(f"{f}:{ln} {lb}" for f, ln, lb, _s in deep_hits[:3])
+        more = f" 等 {len(deep_hits)} 处" if len(deep_hits) > 3 else ""
+        msg = f"面向用户端写作: references/ 深层面含开发过程信息 {len(deep_hits)} 处（{shown}{more}）"
+        if args.scope == "local":
+            _sec("info", msg + " —— 自用包只登记；此包若将对外发布，去掉 --scope local 重跑", "")
+        else:
+            _emit("dev_process", msg,
+                  "references/ 随包发布、用户排障时就会读到，按 §4.1 改写（删日期与过程数据、"
+                  "版本归属、治理口吻）；确属「主题即规则」的方法论文档可逐文件豁免："
+                  "--waive dev_process@references/<文件名>.md --reason \"...\"",
+                  n=len(deep_hits))
+    elif not deep_all:
+        log(f"  ✓ 面向用户端写作（references/ 深层面 {deep_rd} 份无开发过程信息）")
 
     # 9.12 外部不可达引用（S-2 反向：正文《书名号》指向内部/私有文档）
     # ⚠️ 2026-09-30 DSH 全库标定：误报 69–76%——「长度≥8」兜底分支把公开法规/国标判成内部文档，
@@ -1803,7 +2093,8 @@ def main():
         _emit("naming_exposure",
               f"命名曝光: references/ 含第三方评分/贬损内容 {len(nam_hits)} 处（{shown}{more}）",
               "转手发布前对点名对象做脱敏或中性化改写；确属能力背书可 "
-              "--waive naming_exposure --reason \"...\"")
+              "--waive naming_exposure --reason \"...\"",
+              n=len(nam_hits))
     else:
         log("  ✓ 命名曝光（references/ 无第三方评分/贬损内容）")
 
@@ -1822,18 +2113,37 @@ def main():
     else:
         log("  - 门槛枚举一致性: 文档无 M 门槛声明，跳过")
 
-    # 10. 豁免落盘留痕（--skip-ownership 别名不进 waived, 故不落盘 —— 旧用法行为不变）
-    if waived:
-        wpath = write_waiver(root, waived, reason, suppressed, fm)
+    # 10. 豁免落盘留痕（`--skip-ownership` 别名不进 waived, 故不落盘 —— 旧用法行为不变）
+    #     只在**命令行显式给了 --waive** 时写：只带 `--waive-file` 的调用方（批量体检 / CI）
+    #     是复读已有的留痕，不该反过来改写被检对象（门禁是只读的）。
+    if args.waive:
+        wpath = write_waiver(root, waived, reasons, suppressed, fm, source=waive_src)
         if wpath:
             log(f"  ✓ 豁免已落盘: {wpath}")
 
     # 结果
+    # ⚠️ 正文体积读数与告警计数折进结果行（2026-10-01 验收 F14）：`--quiet` 是 CI 常用档，
+    #    只打印"结果"时，逼近 5000 的读数一个字都不出现，等于闭眼靠近红线（当时余量仅 22 token）。
+    #    追加在括号之后，保持 `结果: ` 前缀不变（批量体检按该前缀取行）。
     log("")
+    _est_txt = (f"正文 ≈{body_est}/{BODY_TOKEN_LIMIT} token"
+                if body_est is not None else f"正文体积读取失败（硬上限 {BODY_TOKEN_LIMIT}）")
+    # 豁免披露必须 **quiet-proof**：走结果行这条 print 通道，而不是 log()。
+    # 理由：`--quiet` 是 CI 与批量调用的常态，而 CI 恰恰是最容易把全局豁免悄悄固化下来的地方——
+    # 「豁免了几项、有没有连带放行第一读者面」必须以「结果行里读得到」为准。
+    # 判据取**生效的豁免集合** `waived`（含 `--waive-file` 读进来的），**不是命令行参数**：
+    # 留痕件里的全局豁免在命令行上完全看不到，只按 args.waive 披露会漏掉这条更隐蔽的通道。
+    _waiver_txt = ""
+    if waived:
+        _dormant = [k for k in waived if not suppressed.get(k, 0)]
+        _w = f"豁免 {len(waived)} 项" + (f"（休眠 {len(_dormant)}）" if _dormant else "")
+        if "dev_process" in waived:
+            _w += f"；dev_process 全局豁免连带放行第一读者面 {len(face_hits)} 处"
+        _waiver_txt = " ｜ " + _w
     if fails:
         # 措辞区分：fails 里既有 critical（真高危：凭据/门槛未实现）也有 --strict 下的 warning
         # 告警，统一叫「高危问题」会误导；改「阻断」中性表述（2026-09-30 DSH R-9）。
-        print(f"结果: FAIL ({len(fails)} 项阻断, 禁止发布)")
+        print(f"结果: FAIL ({len(fails)} 项阻断, 禁止发布) ｜ {_est_txt}{_waiver_txt}")
         # 修复指引不受 --quiet 抑制: CI 里只看见 "FAIL" 却不知道改哪儿, 门禁就只是在制造噪音
         print("修复指引:")
         for i, (item, hint) in enumerate(fails, 1):
@@ -1841,9 +2151,9 @@ def main():
             print(f"     └ 修: {hint}")
         sys.exit(1)
     if warns:
-        print(f"结果: PASS (含 {len(warns)} 项告警, 建议人工确认)")
+        print(f"结果: PASS (含 {len(warns)} 项告警, 建议人工确认) ｜ {_est_txt}{_waiver_txt}")
     else:
-        print("结果: PASS (全部通过)")
+        print(f"结果: PASS (全部通过) ｜ {_est_txt}{_waiver_txt}")
 
 
 if __name__ == "__main__":

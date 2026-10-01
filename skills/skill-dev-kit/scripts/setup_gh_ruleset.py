@@ -12,11 +12,13 @@ setup_gh_ruleset.py — GitHub tag 保护 ruleset 一键创建工具
         [--enforcement active|evaluate|disabled] [--dry-run] [--list]
 
   --repo      owner/repo; 缺省时从当前目录 git remote origin 解析
-  --pattern   完整 ref 语法 (如 "refs/tags/*"); 不传则对所有 tag 生效 (推荐)
+  --pattern   完整 ref 语法 (默认 "refs/tags/*"); 写 v* 会 422, 传空串等于规则没建
   --dry-run   只打印将发送的 JSON body, 不真正创建
-  --list      列出现有 rulesets 后退出
+  --list      列出现有 rulesets (含 conditions; refs 为空会标注「形同虚设」) 后退出
 
-退出码: 0 = 成功  1 = 失败 / 同名 ruleset 已存在(需手动处理)
+创建后会**回读 conditions 自证**：为空表示规则不匹配任何 ref（形同虚设），此时退出码为 1。
+
+退出码: 0 = 成功且条件自证通过  1 = 失败 / 同名 ruleset 已存在 / 条件自证未通过
 """
 import argparse
 import json
@@ -26,7 +28,12 @@ import subprocess
 import sys
 
 DEFAULT_RULES = ["deletion", "non_fast_forward"]
-DEFAULT_PATTERN = ""  # 默认空: 对所有 tag 生效 (推荐, 避免 ref 语法 422 坑)
+# ⚠️ 必须**显式**写 conditions（2026-10-01 实测更正）：
+#   旧版本默认留空，注释还写着「省略 conditions 即对所有 tag 生效」——**实测不成立**。
+#   线上一个 conditions 为空的 ruleset 长期形同虚设：删 tag 不被拦，而 GitHub 不报错、
+#   脚本也不报错。空 conditions 语义上就是「不匹配任何 ref」，不是「匹配全部」。
+#   正确写法是完整 ref 语法 `refs/tags/*`（`v*` 这类写法会触发 422）。
+DEFAULT_PATTERN = "refs/tags/*"
 DEFAULT_NAME = "Tag Protection"
 
 
@@ -71,25 +78,64 @@ def resolve_repo(cwd):
 
 
 def build_body(name, pattern, rules, enforcement):
-    """默认不带 conditions (对所有 tag 生效, 实测最稳妥的配置)。
+    """构造 ruleset body；conditions **始终写入**。
 
-    踩坑记录(2026-08-16): 传 pattern="v*" 时 conditions.ref_name.include=["v*"]
-    会触发 422 Validation Failed —— GitHub 要求完整 ref 语法如 "refs/tags/*"。
-    省略 conditions (或空 {}) 即对所有 tag 生效, 是最稳妥的配置。
+    踩坑记录：传 pattern="v*" 时 conditions.ref_name.include=["v*"] 会触发 422 Validation
+    Failed —— GitHub 要求**完整 ref 语法**（`refs/tags/*`）。正确做法是把 pattern 写对，
+    **不是**省略 conditions：空的 conditions 不匹配任何 ref，规则等于没建（详见 DEFAULT_PATTERN 注释）。
     """
     body = {
         "name": name,
         "target": "tag",
         "enforcement": enforcement,
         "rules": [{"type": r} for r in rules],
+        "conditions": {"ref_name": {"include": [pattern], "exclude": []}},
     }
-    if pattern:
-        body["conditions"] = {"ref_name": {"include": [pattern], "exclude": []}}
     return body
 
 
+def verify_conditions(repo, rid):
+    """回读刚创建的 ruleset，确认 `conditions.ref_name.include` 非空。返回是否通过。
+
+    为什么必须回读：**「建好了」与「真的在拦」是两件事**。conditions 为空的 ruleset 不匹配任何 ref，
+    删 tag 照样成功，而创建接口返回成功、GitHub 也不会警告 —— 唯一能发现的办法就是拿返回体自证。
+    """
+    ok, out = gh("api", f"repos/{repo}/rulesets/{rid}")
+    if not ok:
+        print(f"  ⚠️ 条件回读失败（{out[:80]}）—— 自证未完成，请人工核对 conditions")
+        return False
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        print("  ⚠️ 条件回读解析失败 —— 自证未完成，请人工核对 conditions")
+        return False
+    inc = ((data.get("conditions") or {}).get("ref_name") or {}).get("include") or []
+    if inc:
+        print(f"  ✓ 条件自证：ref_name.include = {inc}（非空 ⇒ 才真的在拦）")
+        return True
+    print("  ✗ conditions 为空 ⇒ **该 ruleset 形同虚设**（不匹配任何 ref、删 tag 不被拦）"
+          "—— 请用 --pattern refs/tags/* 重建")
+    return False
+
+
+def print_probe_hint():
+    """打印行为探针指引。⚠️ 探针必须是**可牺牲**的 tag。"""
+    print("  行为探针（建议做一次）：")
+    print("    1) 建可牺牲的探针 tag —— **别拿真版本 tag 试删除**"
+          "（2026-10-01 有先例：用真 tag 试，把 release 打成了 draft）")
+    print("       git tag probe-rule-check && git push origin probe-rule-check")
+    print("    2) gh api -X DELETE repos/<owner>/<repo>/git/refs/tags/probe-rule-check")
+    print("       期望：被拒（Repository rule violations / Cannot delete this tag）")
+    print("    3) 清理探针要先临时把 ruleset 置 disabled，删完再恢复 active")
+
+
 def list_rulesets(repo):
-    ok, out = gh("api", f"repos/{repo}/rulesets", "--jq", ".[] | .name + \" | \" + .target + \" | \" + .enforcement")
+    """列出现有 rulesets，并**带上 conditions** —— 空 conditions 等于形同虚设，
+    不把它显示出来，这种「建了但没在拦」的状态就只能等出事才发现。"""
+    jq = ('.[] | .name + " | " + .target + " | " + .enforcement'
+          ' + " | refs=" + ((.conditions.ref_name.include // []) | join(","))'
+          ' + " | id=" + (.id | tostring)')
+    ok, out = gh("api", f"repos/{repo}/rulesets", "--jq", jq)
     if not ok:
         print(f"[FAIL] 查询 rulesets 失败: {out}")
         sys.exit(1)
@@ -113,7 +159,8 @@ def main():
     ap.add_argument("--repo", help="owner/repo, 缺省从 git remote 解析")
     ap.add_argument("--name", default=DEFAULT_NAME, help=f"ruleset 名称（默认 {DEFAULT_NAME}）")
     ap.add_argument("--pattern", default=DEFAULT_PATTERN,
-                    help=f"生效的 ref 匹配（默认 {DEFAULT_PATTERN}，即所有 tag）")
+                    help=f"生效的 ref 匹配（默认 {DEFAULT_PATTERN}）。必须是**完整 ref 语法**，"
+                         "写 v* 会 422；**不要传空串**——空 conditions 不匹配任何 ref，规则等于没建")
     ap.add_argument("--rules", default=",".join(DEFAULT_RULES), help="逗号分隔的规则类型")
     ap.add_argument("--enforcement", default="active", choices=["active", "evaluate", "disabled"],
                     help="生效模式：active 生效 / evaluate 只评估不拦 / disabled 停用")
@@ -134,7 +181,10 @@ def main():
             print("  当前无 rulesets")
         else:
             for it in items:
-                print(f"  - {it}")
+                line = it
+                if re.search(r"refs=\s*\|", it + " "):
+                    line += "   ⚠️ refs 为空 ⇒ 形同虚设（不匹配任何 ref，删 tag 不被拦）"
+                print(f"  - {line}")
         sys.exit(0)
 
     rules = [r.strip() for r in args.rules.split(",") if r.strip()]
@@ -170,9 +220,17 @@ def main():
         print(f"  target={data.get('target')} | enforcement={data.get('enforcement')}")
         print(f"  规则: {', '.join(r.get('type') for r in data.get('rules', []))}")
         print(f"  管理页: {data.get('_links', {}).get('html', {}).get('href', '')}")
+        rid = data.get("id")
     except json.JSONDecodeError:
         print(f"✓ ruleset 创建成功 (响应解析失败, 原始输出): {out[:200]}")
-    sys.exit(0)
+        rid = None
+
+    # 创建成功 ≠ 真的在拦：回读条件自证，空 conditions 直接判失败（响亮失败 > 静默无效）
+    ok_cond = verify_conditions(repo, rid) if rid else False
+    if not ok_cond:
+        print("  ⚠️ 自证未通过：请核对上面的 conditions，必要时重建")
+    print_probe_hint()
+    sys.exit(0 if ok_cond else 1)
 
 
 if __name__ == "__main__":

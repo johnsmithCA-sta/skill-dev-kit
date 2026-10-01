@@ -20,7 +20,7 @@ eval_loop.py — 技能评测循环编排（with-skill vs baseline 对比 + 聚�
 
   --run        扫描 <evals_dir> 下每个用例目录，执行 run_cmd（若提供）产生 output 与 timing
   --aggregate  聚合所有用例的 grading.json → benchmark.json（默认动作）
-  --out        聚合输出文件（默认 <evals_dir>/benchmark.json）
+  --out        聚合输出文件（不传则写系统临时目录；要更新包内记录传 <evals_dir>/benchmark.json）
   --exts       只统计这些扩展名的产物（逗号分隔，如 .md,.txt）；
                默认 **按内容探测读全部非二进制文本**，不做扩展名白名单
 
@@ -76,6 +76,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 def load_json(p):
@@ -404,7 +405,9 @@ def main():
     ap.add_argument("--aggregate", action="store_true",
                     help="聚合各用例评分并写出 benchmark.json")
     ap.add_argument("--out", default=None,
-                    help="聚合输出路径（默认写 <评估集目录>/benchmark.json）")
+                    help="聚合输出路径（**不传则写系统临时目录、不碰技能目录**——"
+                         "复核动作不该改动被复核对象；要更新包内记录请显式传 "
+                         "<评估集目录>/benchmark.json）")
     ap.add_argument("--exts", default=None,
                     help="只统计这些扩展名的产物（逗号分隔，如 .md,.txt）；"
                          "默认按内容探测读全部非二进制文本")
@@ -418,7 +421,14 @@ def main():
     if not os.path.isdir(evals_dir):
         print("FAIL  目录不存在: %s" % evals_dir)
         return 1
-    out = args.out or os.path.join(evals_dir, "benchmark.json")
+    # 默认**不往技能目录里写**（2026-10-01 验收 F17）：原先默认覆盖 <evals_dir>/benchmark.json，
+    # 而 `--aggregate` 最常在「只读复核 / 验收」场景被调用 —— 复核动作不该改动被复核对象。
+    # 要更新包内 benchmark.json 记录，显式传 `--out <评估集目录>/benchmark.json`（下方会提示）。
+    out = args.out
+    if not out:
+        out = os.path.join(tempfile.gettempdir(), "eval_loop-benchmark.json")
+        print("NOTE  未指定 --out，结果写到临时文件（不覆盖技能目录）：%s" % out)
+        print("      需要更新包内记录时：--out <评估集目录>/benchmark.json")
     # R-16：run_cmd.txt 里的命令相对「技能根」执行（evals_dir 的父目录），占位符 $SKILL/$PY 在此解析
     skill_root = os.path.dirname(evals_dir)
     py_bin = sys.executable

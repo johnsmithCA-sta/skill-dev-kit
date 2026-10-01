@@ -292,15 +292,21 @@ def parse_section_refs(out):
 # ---------------------------------------------------------------- 单个技能
 def audit_skill(name, root, timeout, platform, probe_help):
     """跑完一个技能的四类证据，返回结果 dict（status ∈ PASS/FAIL/REVIEW）。"""
+    # 豁免来源 = 该技能自己的 `.preflight-waiver.json`（若存在）。为什么必须带（2026-10-01 验收 F5）：
+    # 豁免原先只存在于命令行，任何不带 `--waive` 的调用方（批量体检 / 看板 / CI）都会把「已登记豁免」
+    # 的技能判成 FAIL，而面板上看不出红的原因。带上留痕件后，批量面板的结论与发布命令一致。
+    waiver = os.path.join(root, ".preflight-waiver.json")
+    wf = ["--waive-file", waiver] if os.path.isfile(waiver) else []
+
     desc_rc, desc_out = run_cmd(
         [sys.executable, os.path.join(HERE, "eval_trigger.py"), root, "--desc-check"],
         cwd=root, timeout=timeout)
     pre_rc, pre_out = run_cmd(
         [sys.executable, os.path.join(HERE, "preflight_release.py"), root,
-         "--platform", platform], cwd=root, timeout=timeout)
+         "--platform", platform] + wf, cwd=root, timeout=timeout)
     strict_rc, strict_out = run_cmd(
         [sys.executable, os.path.join(HERE, "preflight_release.py"), root,
-         "--platform", platform, "--strict"], cwd=root, timeout=timeout)
+         "--platform", platform, "--strict"] + wf, cwd=root, timeout=timeout)
 
     skill_md = os.path.join(root, "SKILL.md")
     text = _read(skill_md)
