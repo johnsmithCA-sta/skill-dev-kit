@@ -15,7 +15,8 @@ eval_trigger.py — SKILL.md description 触发词评估工具
   --gen          生成评估集模板（should/should-not 触发词清单，人工/LLM 填充后回读）
   --check        静态检查 SKILL.md 触发词覆盖率（默认动作，二者都省略时执行）
   --desc-check   静态校验 frontmatter description 本体质量
-                 （FAIL: 自称构式/动作动词；WARN: 场景/无 how/排他边界/无流程摘要）
+                 （FAIL: 自称构式/无动作动词；WARN: 场景/无 how/排他边界/缺触发词示例/含流程摘要）
+
   --desc TEXT    直接校验给定描述文本（配合 --desc-check，跳过读技能目录，用于快速试错）
   --holdout FLOAT
                  留出集比例（默认 0 = 关闭；**推荐 0.4**）。开启后按固定种子确定性切分
@@ -55,9 +56,9 @@ eval_trigger.py — SKILL.md description 触发词评估工具
   请加 --from-description。
 
 工作原理（desc-check 模式）:
-  对 description 做 6 项静态校验（规则来源：详见 references/SKILL.md编写规范.md §七）：
+  对 description 做 7 项静态校验（规则来源：详见 references/SKILL.md编写规范.md §七）：
   FAIL 级 2 项：自称构式（我可以/本助手/I can…）/ 无动作动词 —— 命中即不合格；
-  WARN 级 4 项：缺场景或文件类型 / 含 how 描述 / 缺排他边界 / 含流程摘要
+  WARN 级 5 项：缺场景或文件类型 / 含 how 描述 / 缺排他边界 / 缺触发词示例 / 含流程摘要
                 —— 默认只提示，--strict 时才计入失败。
   「含流程摘要」= 出现「先…再…」「第 N 步」「step 1/2/3」或两个以上的箭头链（A → B → C）：
   description 一旦把流程概括出来，agent 就会走这条捷径、不再读正文，技能退化成一行 prompt。
