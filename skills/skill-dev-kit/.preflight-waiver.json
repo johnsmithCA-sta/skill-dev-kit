@@ -1,0 +1,23 @@
+{
+  "tool": "preflight_release.py",
+  "target": "/Users/stars/.workbuddy/skills/skill-dev-kit",
+  "skill_version": "1.19.3",
+  "operator": "stars",
+  "waived_at": "2026-10-07T17:09:03+08:00",
+  "waivers": [
+    {
+      "item": "dev_process@references/Changelog写作模板.md",
+      "desc": "面向用户端写作(§4.1)：随包对外文本含开发过程信息（可静态匹配 5 类：版本归属标注 / 实测日期与过程 / 过程叙述 / 治理口吻 / 过程数字；版本档案另加「写作规则自曝」。§4.1 其余 7 类无正则实现，靠步骤 4.5 三视角通读）（逐文件豁免：references/Changelog写作模板.md）",
+      "reason": "主题即规则：讲述对外文本边界时须引用被禁写法",
+      "suppressed_hits": 4,
+      "waiver_state": "生效"
+    },
+    {
+      "item": "dev_process@references/SKILL.md编写规范.md",
+      "desc": "面向用户端写作(§4.1)：随包对外文本含开发过程信息（可静态匹配 5 类：版本归属标注 / 实测日期与过程 / 过程叙述 / 治理口吻 / 过程数字；版本档案另加「写作规则自曝」。§4.1 其余 7 类无正则实现，靠步骤 4.5 三视角通读）（逐文件豁免：references/SKILL.md编写规范.md）",
+      "reason": "主题即规则：讲述对外文本边界时须引用被禁写法",
+      "suppressed_hits": 4,
+      "waiver_state": "生效"
+    }
+  ]
+}
